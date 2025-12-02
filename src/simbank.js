@@ -260,7 +260,7 @@ async function getStatus(bankId) {
     throw new Error(`SIM bank ${bankId} not found`);
   }
 
-  const url = `http://${bank.ip_address}:${bank.port}/goip_get_status.html`;
+  const url = `http://${bank.ip_address}:${bank.port}/goip_get_status.html?username=${encodeURIComponent(bank.username)}&password=${encodeURIComponent(bank.password)}`;
 
   try {
     const response = await fetch(url, {
