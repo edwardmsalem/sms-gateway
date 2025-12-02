@@ -38,38 +38,28 @@ const SMS_ERROR_CODES = {
 const SLOT_ACTIVATION_WAIT_MS = 60000;
 const PROGRESS_INTERVAL_MS = 10000;
 
+// Track last known active slot per bank-channel from inbound SMS
+// Key: "bankId-channel" (e.g., "50004-4"), Value: slot (e.g., "4.07")
+const lastKnownSlot = new Map();
+
 /**
- * Get status of a specific slot
- * @returns {number|null} Status code (3 = ready) or null if unknown
+ * Update the last known slot for a bank-channel
+ * Called when inbound SMS arrives
  */
-async function getSlotStatus(bank, slot) {
-  const url = `http://${bank.ip_address}:${bank.port}/goip_get_status.html`;
+function updateLastKnownSlot(bankId, slot) {
+  if (!slot || !slot.includes('.')) return;
+  const channel = slot.split('.')[0];
+  const key = `${bankId}-${channel}`;
+  lastKnownSlot.set(key, slot);
+  console.log(`[SLOT TRACKER] Updated ${key} -> ${slot}`);
+}
 
-  try {
-    const response = await fetch(url, {
-      method: 'GET',
-      signal: AbortSignal.timeout(5000)
-    });
-
-    if (!response.ok) return null;
-
-    const data = await response.json();
-
-    // Look for the slot in the response - format could be {"4.07": 3} or {"4": 3}
-    if (typeof data === 'object' && !Array.isArray(data)) {
-      if (data[slot] !== undefined) {
-        return parseInt(data[slot], 10);
-      }
-      const portNum = slot.split('.')[0];
-      if (data[portNum] !== undefined) {
-        return parseInt(data[portNum], 10);
-      }
-    }
-
-    return null;
-  } catch (error) {
-    return null;
-  }
+/**
+ * Get the last known slot for a bank-channel
+ */
+function getLastKnownSlot(bankId, channel) {
+  const key = `${bankId}-${channel}`;
+  return lastKnownSlot.get(key);
 }
 
 /**
@@ -128,20 +118,28 @@ async function waitForSlotActivation(slot, onProgress) {
 
 /**
  * Ensure slot is ready, switching and waiting if needed
+ * Uses lastKnownSlot tracker (updated from inbound SMS) to skip wait when slot is already active
  */
 async function ensureSlotReady(bank, slot, onProgress) {
   if (!slot || !slot.includes('.')) return;
 
-  onProgress('checking', `Checking if slot ${slot} is active...`);
-  const status = await getSlotStatus(bank, slot);
+  const channel = slot.split('.')[0];
+  const currentSlot = getLastKnownSlot(bank.bank_id, channel);
 
-  if (status === 3) {
-    onProgress('ready', `Slot ${slot} is ready`);
+  onProgress('checking', `Checking if slot ${slot} is active...`);
+
+  if (currentSlot === slot) {
+    onProgress('ready', `Slot ${slot} is already active (tracked from inbound SMS)`);
     return;
   }
 
-  // Need to switch and wait
-  onProgress('switching', `Activating slot ${slot}...`);
+  // Need to switch and wait - either unknown or different slot
+  if (currentSlot) {
+    onProgress('switching', `Switching from ${currentSlot} to ${slot}...`);
+  } else {
+    onProgress('switching', `Activating slot ${slot} (no prior activity tracked)...`);
+  }
+
   await switchToSlot(bank, slot);
 
   onProgress('waiting', `Waiting 60s for slot ${slot} to register...`);
@@ -381,5 +379,6 @@ module.exports = {
   getAllBanksStatus,
   countActiveSims,
   formatStatusForSlack,
+  updateLastKnownSlot,
   PORT_STATUS
 };

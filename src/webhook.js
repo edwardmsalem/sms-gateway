@@ -3,6 +3,7 @@ const db = require('./database');
 const slack = require('./slack');
 const { normalizePhone } = require('./utils');
 const { getPendingDelivery, clearPendingDelivery } = require('./deliveryTracker');
+const { updateLastKnownSlot } = require('./simbank');
 
 const router = express.Router();
 
@@ -142,6 +143,11 @@ router.post('/sms', async (req, res) => {
     if (!senderPhone || !recipientPhone) {
       console.warn('Invalid phone numbers:', { sender, receiver });
       return res.status(400).json({ error: 'Invalid phone numbers' });
+    }
+
+    // Track the active slot for this bank-channel
+    if (slot) {
+      updateLastKnownSlot(bank, slot);
     }
 
     // Handle delivery reports
