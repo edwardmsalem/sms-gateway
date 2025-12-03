@@ -9,6 +9,35 @@ const { normalizePhone } = require('./utils');
 let gmail = null;
 let lastHistoryId = null;
 
+// Deduplication cache: key = "subject|sender", value = timestamp
+const recentSpamPosts = new Map();
+const DEDUP_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Check if a spam message was recently posted (within 5 minutes)
+ * Returns true if duplicate, false if new
+ */
+function isDuplicateSpam(subject, sender) {
+  const key = `${subject}|${sender}`;
+  const now = Date.now();
+
+  // Clean up old entries
+  for (const [k, timestamp] of recentSpamPosts) {
+    if (now - timestamp > DEDUP_WINDOW_MS) {
+      recentSpamPosts.delete(k);
+    }
+  }
+
+  // Check if this key exists and is recent
+  if (recentSpamPosts.has(key)) {
+    return true;
+  }
+
+  // Record this spam post
+  recentSpamPosts.set(key, now);
+  return false;
+}
+
 /**
  * Initialize Gmail API client
  */
@@ -192,6 +221,11 @@ async function processMaxsipEmail(message) {
     // Filter short codes as spam (unless verification code)
     if (!isVerification && isShortCode(senderPhone)) {
       console.log(`[MAXSIP] Short code filtered as spam: ${senderPhone}`);
+      // Check for duplicate before posting
+      if (isDuplicateSpam(subjectHeader, senderPhone)) {
+        console.log(`[MAXSIP] Duplicate spam skipped: ${senderPhone} - ${subjectHeader}`);
+        return;
+      }
       await slack.postSpamMessage(
         normalizedSender,
         normalizedReceiver,
@@ -208,6 +242,11 @@ async function processMaxsipEmail(message) {
       const spamResult = await classifyMessage(content, normalizedSender);
       if (spamResult.spam) {
         console.log(`[MAXSIP] Spam filtered: ${senderPhone}, category=${spamResult.category}`);
+        // Check for duplicate before posting
+        if (isDuplicateSpam(subjectHeader, senderPhone)) {
+          console.log(`[MAXSIP] Duplicate spam skipped: ${senderPhone} - ${subjectHeader}`);
+          return;
+        }
         await slack.postSpamMessage(
           normalizedSender,
           normalizedReceiver,
