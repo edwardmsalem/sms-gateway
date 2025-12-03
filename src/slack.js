@@ -245,20 +245,30 @@ app.event('app_mention', async ({ event, say }) => {
   // Must be in a thread for SMS sending
   if (!event.thread_ts) {
     await say({
-      text: 'Please use @SMS in a conversation thread.\nUsage: `@SMS [port] [message]`\nExample: `@SMS 4.07 Hello there`',
+      text: 'Please use @SMS in a conversation thread.\nUsage: `@SMS [bank] [slot] [message]`\nExample: `@SMS 50004 4.07 Hello there`',
       thread_ts: event.ts
     });
     return;
   }
 
-  // Parse: first word is port, rest is message
-  const specifiedPort = parts[0];
-  const message = parts.slice(1).join(' ');
+  // Parse: @SMS [bank] [slot] [message]
+  const specifiedBank = parts[0];
+  const specifiedSlot = parts[1];
+  const message = parts.slice(2).join(' ');
 
-  // Validate port format (e.g., "4.07", "1.01")
-  if (!specifiedPort || !/^\d+\.\d+$/.test(specifiedPort)) {
+  // Validate bank format (e.g., "50004")
+  if (!specifiedBank || !/^\d{5}$/.test(specifiedBank)) {
     await say({
-      text: `Invalid format. Port is required.\nUsage: \`@SMS [port] [message]\`\nExample: \`@SMS 4.07 Hello there\``,
+      text: `Invalid format. Bank ID is required (5 digits).\nUsage: \`@SMS [bank] [slot] [message]\`\nExample: \`@SMS 50004 4.07 Hello there\``,
+      thread_ts: event.thread_ts
+    });
+    return;
+  }
+
+  // Validate slot format (e.g., "4.07", "1.01")
+  if (!specifiedSlot || !/^\d+\.\d+$/.test(specifiedSlot)) {
+    await say({
+      text: `Invalid format. Slot is required.\nUsage: \`@SMS [bank] [slot] [message]\`\nExample: \`@SMS ${specifiedBank} 4.07 Hello there\``,
       thread_ts: event.thread_ts
     });
     return;
@@ -266,7 +276,7 @@ app.event('app_mention', async ({ event, say }) => {
 
   if (!message) {
     await say({
-      text: `Message is required.\nUsage: \`@SMS ${specifiedPort} [message]\``,
+      text: `Message is required.\nUsage: \`@SMS ${specifiedBank} ${specifiedSlot} [message]\``,
       thread_ts: event.thread_ts
     });
     return;
@@ -288,7 +298,16 @@ app.event('app_mention', async ({ event, say }) => {
     return;
   }
 
-  const bankId = conversation.sim_bank_id;
+  // Check if specified bank matches conversation's bank
+  const conversationBank = conversation.sim_bank_id;
+  if (specifiedBank !== conversationBank) {
+    await say({
+      text: `:warning: *Warning:* Sending from bank ${specifiedBank}, but conversation originated from bank ${conversationBank}`,
+      thread_ts: event.thread_ts
+    });
+  }
+
+  const bankId = specifiedBank;
   const toPhone = conversation.sender_phone;
 
   try {
@@ -313,7 +332,7 @@ app.event('app_mention', async ({ event, say }) => {
     };
 
     // Send SMS
-    await simbank.sendSms(bankId, specifiedPort, toPhone, message, onProgress);
+    await simbank.sendSms(bankId, specifiedSlot, toPhone, message, onProgress);
 
     // Update progress message to completion
     if (progressTs) {
@@ -321,7 +340,7 @@ app.event('app_mention', async ({ event, say }) => {
         await app.client.chat.update({
           channel: event.channel,
           ts: progressTs,
-          text: `:outbox_tray: SMS sent from slot ${specifiedPort}`
+          text: `:outbox_tray: SMS sent from bank ${bankId} slot ${specifiedSlot}`
         });
       } catch (err) {
         // Ignore update failures
@@ -341,8 +360,8 @@ app.event('app_mention', async ({ event, say }) => {
     await addReaction(event.channel, event.ts, 'outbox_tray');
     trackOutboundSms(toPhone, event.channel, event.ts);
 
-    // Post confirmation with specified port
-    const displayConversation = { ...conversation, sim_port: specifiedPort };
+    // Post confirmation with specified slot
+    const displayConversation = { ...conversation, sim_bank_id: bankId, sim_port: specifiedSlot };
     await postOutboundToThread(event.thread_ts, message, event.user, displayConversation);
 
   } catch (error) {
