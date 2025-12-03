@@ -97,13 +97,16 @@ function buildEnrichedSmsBlocks({ content, bankId, port, enrichment, iccid }) {
   if (deals && deals.length > 0) {
     // Format with deal info
     const firstDeal = deals[0];
-    const matchIndicator = checkAreaCodeMatch(senderAreaCode, deals) ? '✅' : '⚠️';
+    const regionMatch = checkAreaCodeMatch(senderAreaCode, deals);
+    const regionInfo = regionMatch ? '(matches region)' : '(not team region)';
+    const monday = require('./monday');
+    const senderState = monday.getStateFromAreaCode(senderAreaCode);
 
     // Header: Associate name and receiver phone
     text += `📥 *New SMS to ${firstDeal.associateName}* · ${receiverPhoneFormatted}\n`;
 
-    // From line with state and match indicator
-    text += `From: ${senderPhoneFormatted} · ${senderStateName || 'Unknown'} ${matchIndicator}\n`;
+    // From line with state and region match info
+    text += `From: ${senderPhoneFormatted} · ${senderState || 'Unknown'} ${regionInfo}\n`;
 
     // Get closer Slack mention
     let closerMention = '';
@@ -767,16 +770,18 @@ async function postMaxsipMessage(content, enrichment) {
   if (deals && deals.length > 0) {
     const monday = require('./monday');
     const firstDeal = deals[0];
-    const matchIndicator = monday.doesAreaCodeMatchTeam(
+    const regionMatch = monday.doesAreaCodeMatchTeam(
       enrichment.senderAreaCode,
       firstDeal.team
-    ).matches ? '✅' : '⚠️';
+    ).matches;
+    const regionInfo = regionMatch ? '(matches region)' : '(not team region)';
+    const senderState = monday.getStateFromAreaCode(enrichment.senderAreaCode);
 
     // Header: Associate name and receiver phone
     text += `📥 *New SMS to ${firstDeal.associateName}* · ${receiverPhoneFormatted}\n`;
 
-    // From line with state and match indicator
-    text += `From: ${senderPhoneFormatted} · ${senderStateName || 'Unknown'} ${matchIndicator}\n`;
+    // From line with state and region match info
+    text += `From: ${senderPhoneFormatted} · ${senderState || 'Unknown'} ${regionInfo}\n`;
 
     // Get closer Slack mention
     let closerMention = '';
