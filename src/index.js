@@ -6,6 +6,7 @@ const db = require('./database');
 const { router: webhookRouter } = require('./webhook');
 const { app: slackApp, receiver: slackReceiver } = require('./slack');
 const { loadSimBanksFromEnv, formatDateTime } = require('./utils');
+const maxsip = require('./maxsip');
 
 const PORT = process.env.PORT || 3000;
 
@@ -69,7 +70,7 @@ async function main() {
   // Start the server
   const server = createServer(expressApp);
 
-  server.listen(PORT, () => {
+  server.listen(PORT, async () => {
     console.log(`
 ╔═══════════════════════════════════════════════════════════╗
 ║                    SMS Gateway Server                      ║
@@ -82,6 +83,12 @@ async function main() {
 ║  SIM Banks configured: ${simBanks.length.toString().padEnd(34)}║
 ╚═══════════════════════════════════════════════════════════╝
     `);
+
+    // Initialize Maxsip Gmail polling (if configured)
+    const gmailInitialized = await maxsip.initGmail();
+    if (gmailInitialized) {
+      maxsip.startPolling(30000); // Poll every 30 seconds
+    }
   });
 
   // Graceful shutdown

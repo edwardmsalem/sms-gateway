@@ -753,6 +753,69 @@ app.command('/status', async ({ command, ack, respond }) => {
   }
 });
 
+/**
+ * Post a Maxsip SMS message to Slack
+ */
+async function postMaxsipMessage(content, enrichment) {
+  const { deals, senderStateName, senderPhoneFormatted, receiverPhoneFormatted } = enrichment;
+
+  // Route verification codes to dedicated channel
+  const targetChannel = isVerificationCode(content) ? VERIFICATION_CHANNEL_ID : CHANNEL_ID;
+
+  let text = '';
+
+  if (deals && deals.length > 0) {
+    const monday = require('./monday');
+    const firstDeal = deals[0];
+    const matchIndicator = monday.doesAreaCodeMatchTeam(
+      enrichment.senderAreaCode,
+      firstDeal.team
+    ).matches ? '✅' : '⚠️';
+
+    // Header: Associate name and receiver phone
+    text += `📥 *New SMS to ${firstDeal.associateName}* · ${receiverPhoneFormatted}\n`;
+
+    // From line with state and match indicator
+    text += `From: ${senderPhoneFormatted} · ${senderStateName || 'Unknown'} ${matchIndicator}\n`;
+
+    // Get closer Slack mention
+    let closerMention = '';
+    if (firstDeal.closer) {
+      const closerSlackId = monday.getCloserSlackId(firstDeal.closer);
+      closerMention = closerSlackId ? ` <@${closerSlackId}>` : ` @${firstDeal.closer}`;
+    }
+
+    // Deal line(s)
+    if (deals.length === 1) {
+      text += `Deal: ${firstDeal.team} (${firstDeal.status})${closerMention}\n`;
+    } else {
+      const dealSummary = deals.map(d => `${d.team} (${d.status})`).join(', ');
+      text += `Deals: ${dealSummary}${closerMention}\n`;
+    }
+
+    text += '\n';
+    text += `"${content}"\n\n`;
+    text += `_Reply: https://manage.maxsip.com/SMS/Chat.aspx (select ${receiverPhoneFormatted})_`;
+  } else {
+    // Format without deal info
+    text += `📥 *New SMS to ${receiverPhoneFormatted}*\n`;
+    text += `From: ${senderPhoneFormatted} · ${senderStateName || 'Unknown'}\n\n`;
+    text += `"${content}"\n\n`;
+    text += `_Reply: https://manage.maxsip.com/SMS/Chat.aspx (select ${receiverPhoneFormatted})_`;
+  }
+
+  const blocks = [{
+    type: 'section',
+    text: { type: 'mrkdwn', text }
+  }];
+
+  await app.client.chat.postMessage({
+    channel: targetChannel,
+    text: `New Maxsip SMS to ${receiverPhoneFormatted}`,
+    blocks
+  });
+}
+
 module.exports = {
   app,
   receiver,
@@ -760,6 +823,8 @@ module.exports = {
   postInboundToThread,
   postOutboundToThread,
   postSpamMessage,
+  postMaxsipMessage,
   addReaction,
+  isVerificationCode,
   CHANNEL_ID
 };
