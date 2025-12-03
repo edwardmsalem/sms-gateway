@@ -4,18 +4,29 @@ const DEALS_BOARD_ID = '7511353910';
 const IGNORED_STATUSES = ['Closed'];
 
 async function mondayQuery(query, variables = {}) {
+  const token = process.env.MONDAY_API_TOKEN;
+  if (!token) {
+    throw new Error('MONDAY_API_TOKEN environment variable is not set');
+  }
+
   const response = await fetch(MONDAY_API_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': process.env.MONDAY_API_TOKEN,
+      'Authorization': token,
       'API-Version': '2024-01'
     },
     body: JSON.stringify({ query, variables })
   });
+
+  if (!response.ok) {
+    throw new Error(`Monday.com API returned HTTP ${response.status}`);
+  }
+
   const data = await response.json();
   if (data.errors) {
-    throw new Error('Monday.com query failed: ' + data.errors[0].message);
+    const errorMsg = data.errors[0]?.message || JSON.stringify(data.errors);
+    throw new Error('Monday.com query failed: ' + errorMsg);
   }
   return data.data;
 }
