@@ -6,6 +6,28 @@ const { trackOutboundSms } = require('./deliveryTracker');
 
 const CHANNEL_ID = process.env.SLACK_CHANNEL_ID;
 const SPAM_CHANNEL_ID = 'C0A11NU1JDT';
+const VERIFICATION_CHANNEL_ID = 'C05KCUMN35M';
+
+/**
+ * Check if message contains a verification code from known services
+ * Returns true if message should be routed to verification channel
+ */
+function isVerificationCode(content) {
+  if (!content) return false;
+  const text = content.toLowerCase();
+
+  // Google verification codes: G- followed by 6 digits
+  if (/g-\d{6}/i.test(content)) return true;
+
+  // Ticketing/verification services
+  if (text.includes('ticketmaster')) return true;
+  if (text.includes('stubhub')) return true;
+  if (text.includes('seatgeek')) return true;
+  if (text.includes('vivid seats')) return true;
+  if (text.includes('axs')) return true;
+
+  return false;
+}
 
 // Approved Slack user IDs who can send SMS via @SMS command
 const APPROVED_SMS_USERS = ['U05BRER83HT', 'U08FY4FAJ9J', 'U0144K906KA'];
@@ -122,6 +144,9 @@ async function postNewConversation(conversation, messageContent, enrichment) {
   const bankId = conversation.sim_bank_id;
   const port = conversation.sim_port;
 
+  // Route verification codes to dedicated channel
+  const targetChannel = isVerificationCode(messageContent) ? VERIFICATION_CHANNEL_ID : CHANNEL_ID;
+
   // Use enriched blocks if enrichment data is provided
   const blocks = enrichment
     ? buildEnrichedSmsBlocks({
@@ -143,7 +168,7 @@ async function postNewConversation(conversation, messageContent, enrichment) {
       });
 
   const result = await app.client.chat.postMessage({
-    channel: CHANNEL_ID,
+    channel: targetChannel,
     text: `New SMS to ${formatPhoneDisplay(conversation.recipient_phone)}`,
     blocks
   });
@@ -158,6 +183,9 @@ async function postNewConversation(conversation, messageContent, enrichment) {
 async function postInboundToThread(threadTs, senderPhone, recipientPhone, content, conversation, enrichment) {
   const bankId = conversation?.sim_bank_id || 'unknown';
   const port = conversation?.sim_port || 'PORT';
+
+  // Route verification codes to dedicated channel
+  const targetChannel = isVerificationCode(content) ? VERIFICATION_CHANNEL_ID : CHANNEL_ID;
 
   // Use enriched blocks if enrichment data is provided
   const blocks = enrichment
@@ -180,7 +208,7 @@ async function postInboundToThread(threadTs, senderPhone, recipientPhone, conten
       });
 
   const result = await app.client.chat.postMessage({
-    channel: CHANNEL_ID,
+    channel: targetChannel,
     thread_ts: threadTs,
     reply_broadcast: true,
     text: `New message from ${formatPhoneDisplay(senderPhone)}`,
