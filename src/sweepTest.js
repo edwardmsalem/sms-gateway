@@ -83,32 +83,47 @@ async function runSweepTest(slackApp, bankId) {
 
     console.log(`[SWEEP TEST] Sending switch commands for 64 ports to slot 03`);
 
-    // Send all switch commands simultaneously
+    // Send switch commands in batches to avoid overwhelming the SIM bank
     const switchUrl = `http://${bank.ip_address}:${bank.port}/goip_send_cmd.html?username=${encodeURIComponent(bank.username)}&password=${encodeURIComponent(bank.password)}`;
+    const BATCH_SIZE = 8;
+    const BATCH_DELAY_MS = 500;
 
-    const switchPromises = slots.map(async (slot) => {
-      const switchBody = {
-        type: 'command',
-        op: 'switch',
-        ports: slot
-      };
+    const switchResults = [];
 
-      try {
-        const res = await fetch(switchUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(switchBody),
-          signal: AbortSignal.timeout(10000)
-        });
+    for (let i = 0; i < slots.length; i += BATCH_SIZE) {
+      const batch = slots.slice(i, i + BATCH_SIZE);
+      console.log(`[SWEEP TEST] Sending batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(slots.length / BATCH_SIZE)}: ports ${batch[0]} - ${batch[batch.length - 1]}`);
 
-        const text = await res.text();
-        return { slot, success: res.ok, response: text };
-      } catch (err) {
-        return { slot, success: false, error: err.message };
+      const batchPromises = batch.map(async (slot) => {
+        const switchBody = {
+          type: 'command',
+          op: 'switch',
+          ports: slot
+        };
+
+        try {
+          const res = await fetch(switchUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(switchBody),
+            signal: AbortSignal.timeout(30000)
+          });
+
+          const text = await res.text();
+          return { slot, success: res.ok, response: text };
+        } catch (err) {
+          return { slot, success: false, error: err.message };
+        }
+      });
+
+      const batchResults = await Promise.all(batchPromises);
+      switchResults.push(...batchResults);
+
+      // Small delay between batches to avoid overwhelming the SIM bank
+      if (i + BATCH_SIZE < slots.length) {
+        await new Promise(resolve => setTimeout(resolve, BATCH_DELAY_MS));
       }
-    });
-
-    const switchResults = await Promise.all(switchPromises);
+    }
     const successCount = switchResults.filter(r => r.success).length;
     const failCount = switchResults.filter(r => !r.success).length;
 
