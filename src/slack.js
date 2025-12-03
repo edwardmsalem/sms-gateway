@@ -6,7 +6,7 @@ const { trackOutboundSms } = require('./deliveryTracker');
 const sweepTest = require('./sweepTest');
 
 const CHANNEL_ID = process.env.SLACK_CHANNEL_ID;
-const SPAM_CHANNEL_ID = 'C0A11NU1JDT';
+const SPAM_CHANNEL_ID = 'C0A1EUF2D36';
 const VERIFICATION_CHANNEL_ID = 'C05KCUMN35M';
 
 /**
