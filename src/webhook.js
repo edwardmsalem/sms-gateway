@@ -4,6 +4,7 @@ const slack = require('./slack');
 const { normalizePhone } = require('./utils');
 const { getPendingDelivery, clearPendingDelivery } = require('./deliveryTracker');
 const { updateLastKnownSlot } = require('./simbank');
+const { classifyMessage } = require('./spamFilter');
 
 const router = express.Router();
 
@@ -158,6 +159,13 @@ router.post('/sms', async (req, res) => {
     // Check if sender is blocked
     if (db.isNumberBlocked(senderPhone)) {
       return res.status(200).json({ status: 'blocked' });
+    }
+
+    // Check for spam using Claude
+    const spamResult = await classifyMessage(content, senderPhone);
+    if (spamResult.spam) {
+      console.log(`[SPAM BLOCKED] From ${senderPhone}: category=${spamResult.category}, confidence=${spamResult.confidence}`);
+      return res.status(200).json({ status: 'spam_filtered', category: spamResult.category });
     }
 
     // Find or create conversation
