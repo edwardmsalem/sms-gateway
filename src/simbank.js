@@ -69,18 +69,22 @@ function getLastKnownSlot(bankId, channel) {
  * @param {string} slot - Slot notation (e.g., "4.07")
  */
 async function activateSlot(bank, slot) {
-  // Parse slot notation: "4.07" -> channel=4, slotNum=8 (0-indexed to 1-indexed)
-  const parts = slot.split('.');
-  const channel = parts[0];
-  const slotIndex = parseInt(parts[1], 10);
-  const slotNum = slotIndex + 1; // Convert 0-indexed to 1-indexed
+  const switchUrl = `http://${bank.ip_address}:${bank.port}/goip_send_cmd.html?username=${encodeURIComponent(bank.username)}&password=${encodeURIComponent(bank.password)}`;
 
-  const switchUrl = `http://${bank.ip_address}:${bank.port}/goip_switch_slot.html?username=${encodeURIComponent(bank.username)}&password=${encodeURIComponent(bank.password)}&port=${channel}&slot=${slotNum}`;
+  const switchBody = {
+    type: 'command',
+    op: 'switch',
+    ports: slot
+  };
 
-  console.log(`[SLOT ACTIVATE] Switching bank ${bank.bank_id} to slot ${slot} (channel=${channel}, slotNum=${slotNum})`);
+  console.log(`[SLOT ACTIVATE] Switching bank ${bank.bank_id} to slot ${slot}`);
+  console.log(`[SLOT ACTIVATE] URL: ${switchUrl}`);
+  console.log(`[SLOT ACTIVATE] Body: ${JSON.stringify(switchBody)}`);
 
   const res = await fetch(switchUrl, {
-    method: 'GET',
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(switchBody),
     signal: AbortSignal.timeout(10000)
   });
 
