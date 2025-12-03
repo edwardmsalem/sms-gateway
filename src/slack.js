@@ -9,7 +9,7 @@ const CHANNEL_ID = process.env.SLACK_CHANNEL_ID;
 const SPAM_CHANNEL_ID = 'C0A1EUF2D36';
 const VERIFICATION_CHANNEL_ID = 'C05KCUMN35M';
 
-// Spam threading: key = "sender|contentHash", value = { thread_ts, channel, count, timestamp, parentTs }
+// Spam threading: key = "sender|contentHash", value = { thread_ts, channel, count, timestamp, parentTs, recipients }
 const spamThreads = new Map();
 const SPAM_THREAD_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -314,7 +314,14 @@ async function postSpamMessage(senderPhone, recipientPhone, content, spamResult,
   const existingThread = spamThreads.get(spamKey);
 
   if (existingThread) {
-    // Reply in existing thread
+    // Check if we've already posted for this recipient
+    if (existingThread.recipients.has(recipientPhone)) {
+      console.log(`[SPAM THREAD] Duplicate recipient skipped: ${recipientDisplay}`);
+      return;
+    }
+
+    // Add recipient to set and update thread
+    existingThread.recipients.add(recipientPhone);
     existingThread.count++;
     existingThread.timestamp = Date.now();
 
@@ -374,13 +381,14 @@ async function postSpamMessage(senderPhone, recipientPhone, content, spamResult,
       unfurl_media: false
     });
 
-    // Store thread info
+    // Store thread info with recipients set
     spamThreads.set(spamKey, {
       thread_ts: result.ts,
       parentTs: result.ts,
       channel: SPAM_CHANNEL_ID,
       count: 1,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      recipients: new Set([recipientPhone])
     });
 
     console.log(`[SPAM THREAD] Created new thread ${result.ts} for ${senderDisplay}`);
