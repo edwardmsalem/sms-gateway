@@ -250,6 +250,35 @@ const TEAM_MARKETS = {
   'washington capitals': ['DC', 'MD', 'VA'], 'winnipeg jets': ['MB']
 };
 
+const CLOSER_SLACK_IDS = {
+  'jerry': 'U0890N1T1RV',
+  'joel': 'U0890N1T1RV',
+  'jeremy andrews': 'U07RCLS2Y31',
+  'jeremy': 'U07RCLS2Y31',
+  'romeo': 'U089F5PGYFM',
+  'rommel lucero': 'U089F5PGYFM',
+  'rommel': 'U089F5PGYFM',
+  'tristan': 'U089F85AH5Y',
+  'jorge mendez': 'U09E00AG2AF',
+  'jorge': 'U09E00AG2AF',
+  'ariel bennett': 'U08LSC9UFU3',
+  'ariel': 'U08LSC9UFU3',
+  'frances dignos': 'U09EX2GUQF2',
+  'frances': 'U09EX2GUQF2',
+  'edward salem': 'U0144K906KA',
+  'edward': 'U0144K906KA',
+  'ed': 'U0144K906KA',
+  'elia molinari': 'U08M6BP6X3N',
+  'elia': 'U08M6BP6X3N',
+  'dayna': 'U05BRER83HT'
+};
+
+function getCloserSlackId(closerName) {
+  if (!closerName) return null;
+  const normalized = closerName.toLowerCase().trim();
+  return CLOSER_SLACK_IDS[normalized] || null;
+}
+
 function getStateFromAreaCode(areaCode) {
   return AREA_CODE_TO_STATE[areaCode] || null;
 }
@@ -285,5 +314,6 @@ module.exports = {
   getAreaCodeFromPhone,
   getStateFromAreaCode,
   doesAreaCodeMatchTeam,
+  getCloserSlackId,
   STATE_NAMES
 };

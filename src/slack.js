@@ -67,6 +67,7 @@ function checkAreaCodeMatch(senderAreaCode, deals) {
  * Build enriched SMS message blocks with Monday.com deal info
  */
 function buildEnrichedSmsBlocks({ content, bankId, port, enrichment, iccid }) {
+  const monday = require('./monday');
   const { deals, senderAreaCode, senderStateName, senderPhoneFormatted, receiverPhoneFormatted } = enrichment;
 
   let text = '';
@@ -82,16 +83,19 @@ function buildEnrichedSmsBlocks({ content, bankId, port, enrichment, iccid }) {
     // From line with state and match indicator
     text += `From: ${senderPhoneFormatted} · ${senderStateName || 'Unknown'} ${matchIndicator}\n`;
 
+    // Get closer Slack mention
+    let closerMention = '';
+    if (firstDeal.closer) {
+      const closerSlackId = monday.getCloserSlackId(firstDeal.closer);
+      closerMention = closerSlackId ? ` <@${closerSlackId}>` : ` @${firstDeal.closer}`;
+    }
+
     // Deal line(s)
     if (deals.length === 1) {
-      text += `Deal: ${firstDeal.team} (${firstDeal.status})`;
-      if (firstDeal.closer) text += ` @${firstDeal.closer}`;
-      text += '\n';
+      text += `Deal: ${firstDeal.team} (${firstDeal.status})${closerMention}\n`;
     } else {
       const dealSummary = deals.map(d => `${d.team} (${d.status})`).join(', ');
-      text += `Deals: ${dealSummary}`;
-      if (firstDeal.closer) text += ` @${firstDeal.closer}`;
-      text += '\n';
+      text += `Deals: ${dealSummary}${closerMention}\n`;
     }
 
     text += '\n';
