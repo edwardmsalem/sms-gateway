@@ -25,7 +25,7 @@ const app = new App({
 /**
  * Build SMS message blocks for Slack
  */
-function buildSmsBlocks({ recipientDisplay, senderDisplay, content, bankId, port, timestamp, isOutbound, sentBy }) {
+function buildSmsBlocks({ recipientDisplay, senderDisplay, content, bankId, port, timestamp, isOutbound, sentBy, iccid }) {
   const icon = isOutbound ? '📤' : '📨';
   const title = isOutbound ? 'Outgoing SMS' : `New SMS to ${recipientDisplay}`;
 
@@ -36,7 +36,9 @@ function buildSmsBlocks({ recipientDisplay, senderDisplay, content, bankId, port
     if (bankId) text += `\n📍 Bank ${bankId} · Port ${port}`;
     text += `\nSent by: <@${sentBy}> | ${timestamp}`;
   } else {
-    text += `From: ${senderDisplay}\n📍 *Bank ${bankId} · Slot ${port}*\nReceived: ${timestamp}\n\n_Reply: @SMS ${bankId} ${port} followed by your message_`;
+    text += `From: ${senderDisplay}\n📍 *Bank ${bankId} · Slot ${port}*`;
+    if (iccid) text += `\n• *ICCID:* ${iccid}`;
+    text += `\nReceived: ${timestamp}\n\n_Reply: @SMS ${bankId} ${port} followed by your message_`;
   }
 
   return [{
@@ -59,7 +61,8 @@ async function postNewConversation(conversation, messageContent) {
       bankId: conversation.sim_bank_id,
       port: conversation.sim_port,
       timestamp: formatTime(),
-      isOutbound: false
+      isOutbound: false,
+      iccid: conversation.iccid
     })
   });
 
@@ -83,7 +86,8 @@ async function postInboundToThread(threadTs, senderPhone, recipientPhone, conten
       bankId: conversation?.sim_bank_id || 'unknown',
       port: conversation?.sim_port || 'PORT',
       timestamp: formatTime(),
-      isOutbound: false
+      isOutbound: false,
+      iccid: conversation?.iccid
     })
   });
 

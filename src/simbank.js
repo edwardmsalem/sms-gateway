@@ -359,7 +359,8 @@ async function getSlotStatus(bankId, slot) {
       sn: slotData.sn || 'N/A',
       sig: slotData.sig,
       bal: slotData.bal || 'N/A',
-      opr: slotData.opr || 'N/A'
+      opr: slotData.opr || 'N/A',
+      iccid: slotData.iccid || null
     };
   } catch (error) {
     return { error: `API call failed: ${error.message}` };

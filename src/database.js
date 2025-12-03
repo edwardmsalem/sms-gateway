@@ -39,11 +39,19 @@ async function initialize() {
       sim_port TEXT NOT NULL,
       slack_channel_id TEXT NOT NULL,
       slack_thread_ts TEXT,
+      iccid TEXT,
       last_message_at TEXT NOT NULL DEFAULT (datetime('now')),
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       UNIQUE(sender_phone, recipient_phone)
     )
   `);
+
+  // Add iccid column if it doesn't exist (for existing databases)
+  try {
+    db.run(`ALTER TABLE conversations ADD COLUMN iccid TEXT`);
+  } catch (e) {
+    // Column already exists, ignore
+  }
 
   db.run(`
     CREATE TABLE IF NOT EXISTS blocked_numbers (
@@ -163,13 +171,17 @@ function getRecentConversations(channelId) {
 function createConversation(data) {
   // Use INSERT OR IGNORE to handle duplicate sender+recipient gracefully
   run(
-    `INSERT OR IGNORE INTO conversations (sender_phone, recipient_phone, sim_bank_id, sim_port, slack_channel_id, slack_thread_ts)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [data.sender_phone, data.recipient_phone, data.sim_bank_id, data.sim_port, data.slack_channel_id, data.slack_thread_ts]
+    `INSERT OR IGNORE INTO conversations (sender_phone, recipient_phone, sim_bank_id, sim_port, slack_channel_id, slack_thread_ts, iccid)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [data.sender_phone, data.recipient_phone, data.sim_bank_id, data.sim_port, data.slack_channel_id, data.slack_thread_ts, data.iccid || null]
   );
   // Always return the conversation by looking up sender+recipient (handles both new and existing)
   return getOne('SELECT * FROM conversations WHERE sender_phone = ? AND recipient_phone = ?',
     [data.sender_phone, data.recipient_phone]);
+}
+
+function updateConversationIccid(id, iccid) {
+  run(`UPDATE conversations SET iccid = ? WHERE id = ?`, [iccid, id]);
 }
 
 function updateConversationThread(threadTs, id) {
@@ -251,6 +263,7 @@ module.exports = {
   createConversation,
   updateConversationThread,
   updateConversationTimestamp,
+  updateConversationIccid,
   getConversationById,
 
   // Blocked Numbers

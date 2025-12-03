@@ -3,7 +3,7 @@ const db = require('./database');
 const slack = require('./slack');
 const { normalizePhone } = require('./utils');
 const { getPendingDelivery, clearPendingDelivery } = require('./deliveryTracker');
-const { updateLastKnownSlot } = require('./simbank');
+const { updateLastKnownSlot, getSlotStatus } = require('./simbank');
 const { classifyMessage } = require('./spamFilter');
 
 const router = express.Router();
@@ -169,6 +169,20 @@ router.post('/sms', async (req, res) => {
       return res.status(200).json({ status: 'spam_filtered', category: spamResult.category });
     }
 
+    // Get ICCID from slot status
+    let iccid = null;
+    if (bank && slot) {
+      try {
+        const slotStatus = await getSlotStatus(bank, slot);
+        if (!slotStatus.error && slotStatus.iccid) {
+          iccid = slotStatus.iccid;
+          console.log(`[ICCID] Bank ${bank} Slot ${slot}: ${iccid}`);
+        }
+      } catch (err) {
+        console.warn(`[ICCID] Failed to get ICCID: ${err.message}`);
+      }
+    }
+
     // Find or create conversation
     let conversation = db.findConversation(senderPhone, recipientPhone);
     let isNewConversation = false;
@@ -180,7 +194,8 @@ router.post('/sms', async (req, res) => {
         sim_bank_id: bank,
         sim_port: slot || 'unknown',
         slack_channel_id: process.env.SLACK_CHANNEL_ID,
-        slack_thread_ts: null
+        slack_thread_ts: null,
+        iccid: iccid
       });
 
       if (!conversation) {
@@ -189,6 +204,10 @@ router.post('/sms', async (req, res) => {
       }
 
       isNewConversation = !conversation.slack_thread_ts;
+    } else if (iccid && conversation.iccid !== iccid) {
+      // Update ICCID if it changed
+      db.updateConversationIccid(conversation.id, iccid);
+      conversation.iccid = iccid;
     }
 
     // Record the message
