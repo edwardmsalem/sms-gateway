@@ -4,14 +4,15 @@ const { withRetry } = require('./utils');
 // Port status code meanings
 const PORT_STATUS = {
   0: 'No SIM card',
-  1: 'Idle',
+  1: 'Idle SIM present',
   2: 'Registering',
-  3: 'Registered (ready)',
+  3: 'Registered - Ready',
   4: 'Call connected',
   5: 'Register failed',
   6: 'Low balance',
   7: 'Locked by device',
-  8: 'Locked by operator'
+  8: 'Locked by operator',
+  9: 'SIM card error'
 };
 
 // Ejoin API error codes
@@ -289,6 +290,64 @@ async function getStatus(bankId) {
 }
 
 /**
+ * Get status of a specific SIM slot
+ * @param {string} bankId - The bank ID (e.g., "50004")
+ * @param {string} slot - The slot notation (e.g., "4.07")
+ * @returns {object} Slot status with all fields or error
+ */
+async function getSlotStatus(bankId, slot) {
+  const bank = db.getSimBank(bankId);
+  if (!bank) {
+    return { error: `SIM bank ${bankId} not found` };
+  }
+
+  const url = `http://${bank.ip_address}:${bank.port}/goip_get_status.html?username=${encodeURIComponent(bank.username)}&password=${encodeURIComponent(bank.password)}&all_slots=1`;
+
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      signal: AbortSignal.timeout(10000)
+    });
+
+    if (!response.ok) {
+      return { error: `HTTP ${response.status}: ${response.statusText}` };
+    }
+
+    const data = await response.json();
+
+    // Find the slot in the response - slots are inside data.status array
+    let slotData = null;
+    const statusArray = data.status || data;
+    if (Array.isArray(statusArray)) {
+      slotData = statusArray.find(item => String(item.port) === slot);
+    }
+
+    if (!slotData) {
+      return { error: `Slot ${slot} not found in bank ${bankId}` };
+    }
+
+    // Parse status code
+    const statusCode = parseInt(slotData.st, 10);
+    const statusText = PORT_STATUS[statusCode] || 'Unknown';
+
+    return {
+      bankId,
+      slot,
+      port: slotData.port,
+      active: slotData.active,
+      st: statusCode,
+      statusText,
+      sn: slotData.sn || 'N/A',
+      sig: slotData.sig,
+      bal: slotData.bal || 'N/A',
+      opr: slotData.opr || 'N/A'
+    };
+  } catch (error) {
+    return { error: `API call failed: ${error.message}` };
+  }
+}
+
+/**
  * Parse port status response from SIM bank
  */
 function parsePortStatus(data) {
@@ -376,6 +435,7 @@ function formatStatusForSlack(status) {
 module.exports = {
   sendSms,
   getStatus,
+  getSlotStatus,
   getAllBanksStatus,
   countActiveSims,
   formatStatusForSlack,

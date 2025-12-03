@@ -169,14 +169,72 @@ async function findConversationFromParent(channel, threadTs) {
 }
 
 /**
- * App mention handler for thread replies
- * Usage: @SMS [port] [message]
+ * Format slot status for Slack display
+ */
+function formatSlotStatusForSlack(status) {
+  if (status.error) {
+    return `:x: *Error:* ${status.error}`;
+  }
+
+  const activeIcon = status.active === 1 || status.active === '1' ? ':white_check_mark: Yes' : ':x: No';
+  const activeValue = status.active;
+
+  let text = `:bar_chart: *Status for ${status.bankId} slot ${status.slot}*\n`;
+  text += `• *Active:* ${activeIcon} (${activeValue})\n`;
+  text += `• *Status:* ${status.statusText} (${status.st})\n`;
+  text += `• *Phone:* ${status.sn}\n`;
+  text += `• *Signal:* ${status.sig !== undefined ? `${status.sig} dBm` : 'N/A'}\n`;
+  text += `• *Balance:* ${status.bal}\n`;
+  text += `• *Operator:* ${status.opr}`;
+
+  return text;
+}
+
+/**
+ * App mention handler for thread replies and status checks
+ * Usage: @SMS [port] [message] - Send SMS
+ * Usage: @SMS status [bank] [slot] - Check slot status
  * Example: @SMS 4.07 Hello there
+ * Example: @SMS status 50004 4.07
  */
 app.event('app_mention', async ({ event, say }) => {
   await addReaction(event.channel, event.ts, 'eyes');
 
-  // Must be in a thread
+  // Parse the command text
+  const fullText = event.text.replace(/<@[A-Z0-9]+>/g, '').trim();
+  const parts = fullText.split(/\s+/);
+
+  // Check if this is a status command
+  if (parts[0]?.toLowerCase() === 'status') {
+    const bankId = parts[1];
+    const slot = parts[2];
+
+    if (!bankId || !slot) {
+      await say({
+        text: 'Usage: `@SMS status [bank] [slot]`\nExample: `@SMS status 50004 4.07`',
+        thread_ts: event.thread_ts || event.ts
+      });
+      return;
+    }
+
+    try {
+      const status = await simbank.getSlotStatus(bankId, slot);
+      await say({
+        text: formatSlotStatusForSlack(status),
+        thread_ts: event.thread_ts || event.ts
+      });
+      await addReaction(event.channel, event.ts, 'white_check_mark');
+    } catch (error) {
+      await say({
+        text: `:x: *Error:* ${error.message}`,
+        thread_ts: event.thread_ts || event.ts
+      });
+      await addReaction(event.channel, event.ts, 'x');
+    }
+    return;
+  }
+
+  // Must be in a thread for SMS sending
   if (!event.thread_ts) {
     await say({
       text: 'Please use @SMS in a conversation thread.\nUsage: `@SMS [port] [message]`\nExample: `@SMS 4.07 Hello there`',
@@ -186,8 +244,6 @@ app.event('app_mention', async ({ event, say }) => {
   }
 
   // Parse: first word is port, rest is message
-  const fullText = event.text.replace(/<@[A-Z0-9]+>/g, '').trim();
-  const parts = fullText.split(/\s+/);
   const specifiedPort = parts[0];
   const message = parts.slice(1).join(' ');
 
