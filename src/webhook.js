@@ -6,6 +6,7 @@ const { getPendingDelivery, clearPendingDelivery } = require('./deliveryTracker'
 const { updateLastKnownSlot, getSlotStatus } = require('./simbank');
 const { classifyMessage } = require('./spamFilter');
 const monday = require('./monday');
+const sweepTest = require('./sweepTest');
 
 /**
  * Format phone number for display
@@ -186,6 +187,8 @@ router.post('/sms', async (req, res) => {
       if (spamResult.spam) {
         console.log(`[SPAM BLOCKED] From ${senderPhone}: category=${spamResult.category}, confidence=${spamResult.confidence}`);
         await slack.postSpamMessage(senderPhone, recipientPhone, content, spamResult, bank, slot);
+        // Track for sweep test if active
+        sweepTest.recordMessageArrival('spam', slot);
         return res.status(200).json({ status: 'spam_filtered', category: spamResult.category });
       }
     }
@@ -285,6 +288,10 @@ router.post('/sms', async (req, res) => {
         db.updateConversationTimestamp(conversation.id);
       }
     }
+
+    // Track for sweep test if active
+    const channelType = isVerification ? 'verification' : 'sms';
+    sweepTest.recordMessageArrival(channelType, slot);
 
     res.status(200).json({ status: 'ok' });
   } catch (error) {

@@ -3,6 +3,7 @@ const db = require('./database');
 const simbank = require('./simbank');
 const { formatPhoneDisplay, parsePhoneFromCommand, formatTime } = require('./utils');
 const { trackOutboundSms } = require('./deliveryTracker');
+const sweepTest = require('./sweepTest');
 
 const CHANNEL_ID = process.env.SLACK_CHANNEL_ID;
 const SPAM_CHANNEL_ID = 'C0A11NU1JDT';
@@ -772,6 +773,48 @@ app.command('/status', async ({ command, ack, respond }) => {
     await respond({
       response_type: 'ephemeral',
       text: `Failed to get status: ${error.message}`
+    });
+  }
+});
+
+/**
+ * /sweep-test command handler
+ * Switches all 64 ports to slot 03 and tracks message arrivals
+ * Usage: /sweep-test
+ */
+app.command('/sweep-test', async ({ command, ack, respond }) => {
+  await ack();
+
+  // Check if a test is already running
+  if (sweepTest.getActiveTest()) {
+    await respond({
+      response_type: 'ephemeral',
+      text: 'A sweep test is already in progress. Please wait for it to complete.'
+    });
+    return;
+  }
+
+  const bankId = '50004';
+
+  await respond({
+    response_type: 'ephemeral',
+    text: `Starting sweep test for bank ${bankId}. This will take approximately 3 minutes. Results will be posted to <#${sweepTest.TEST_CHANNEL_ID}>.`
+  });
+
+  try {
+    // Run the test asynchronously (don't await - let it run in background)
+    sweepTest.runSweepTest(app, bankId).catch(error => {
+      console.error('Sweep test failed:', error.message);
+      app.client.chat.postMessage({
+        channel: sweepTest.TEST_CHANNEL_ID,
+        text: `:x: Sweep test failed: ${error.message}`
+      }).catch(e => console.error('Failed to post error message:', e.message));
+    });
+  } catch (error) {
+    console.error('Failed to start sweep test:', error.message);
+    await respond({
+      response_type: 'ephemeral',
+      text: `Failed to start sweep test: ${error.message}`
     });
   }
 });
