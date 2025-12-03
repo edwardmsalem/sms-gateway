@@ -165,6 +165,7 @@ router.post('/sms', async (req, res) => {
     const spamResult = await classifyMessage(content, senderPhone);
     if (spamResult.spam) {
       console.log(`[SPAM BLOCKED] From ${senderPhone}: category=${spamResult.category}, confidence=${spamResult.confidence}`);
+      await slack.postSpamMessage(senderPhone, recipientPhone, content, spamResult, bank, slot);
       return res.status(200).json({ status: 'spam_filtered', category: spamResult.category });
     }
 

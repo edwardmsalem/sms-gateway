@@ -5,6 +5,7 @@ const { formatPhoneDisplay, parsePhoneFromCommand, formatTime } = require('./uti
 const { trackOutboundSms } = require('./deliveryTracker');
 
 const CHANNEL_ID = process.env.SLACK_CHANNEL_ID;
+const SPAM_CHANNEL_ID = 'C0A11NU1JDT';
 
 // Approved Slack user IDs who can send SMS via @SMS command
 const APPROVED_SMS_USERS = ['U05BRER83HT', 'U08FY4FAJ9J', 'U0144K906KA'];
@@ -123,6 +124,32 @@ async function addReaction(channel, timestamp, emoji) {
       console.error(`Failed to add ${emoji} reaction:`, error.message);
     }
   }
+}
+
+/**
+ * Post a spam message to the spam channel
+ */
+async function postSpamMessage(senderPhone, recipientPhone, content, spamResult, bankId, slot) {
+  const senderDisplay = formatPhoneDisplay(senderPhone);
+  const recipientDisplay = formatPhoneDisplay(recipientPhone);
+
+  let text = `:no_entry: *SPAM BLOCKED*\n`;
+  text += `━━━━━━━━━━━━━━━━━━━━━━━\n`;
+  text += `*Category:* ${spamResult.category || 'Unknown'}\n`;
+  text += `*Confidence:* ${spamResult.confidence}\n`;
+  text += `━━━━━━━━━━━━━━━━━━━━━━━\n`;
+  text += `From: ${senderDisplay}\n`;
+  text += `To: ${recipientDisplay}\n`;
+  if (bankId) text += `Bank ${bankId} · Slot ${slot || 'unknown'}\n`;
+  text += `━━━━━━━━━━━━━━━━━━━━━━━\n`;
+  text += `${content}`;
+
+  await app.client.chat.postMessage({
+    channel: SPAM_CHANNEL_ID,
+    text,
+    unfurl_links: false,
+    unfurl_media: false
+  });
 }
 
 /**
@@ -604,6 +631,7 @@ module.exports = {
   postNewConversation,
   postInboundToThread,
   postOutboundToThread,
+  postSpamMessage,
   addReaction,
   CHANNEL_ID
 };
