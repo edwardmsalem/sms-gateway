@@ -174,12 +174,20 @@ router.post('/sms', async (req, res) => {
       return res.status(200).json({ status: 'blocked' });
     }
 
-    // Check for spam using Claude
-    const spamResult = await classifyMessage(content, senderPhone);
-    if (spamResult.spam) {
-      console.log(`[SPAM BLOCKED] From ${senderPhone}: category=${spamResult.category}, confidence=${spamResult.confidence}`);
-      await slack.postSpamMessage(senderPhone, recipientPhone, content, spamResult, bank, slot);
-      return res.status(200).json({ status: 'spam_filtered', category: spamResult.category });
+    // Check for verification codes FIRST - skip spam filter for these
+    const isVerification = slack.isVerificationCode(content);
+    if (isVerification) {
+      console.log(`[VERIFICATION] Detected verification code, skipping spam filter`);
+    }
+
+    // Check for spam using Claude (skip if verification code)
+    if (!isVerification) {
+      const spamResult = await classifyMessage(content, senderPhone);
+      if (spamResult.spam) {
+        console.log(`[SPAM BLOCKED] From ${senderPhone}: category=${spamResult.category}, confidence=${spamResult.confidence}`);
+        await slack.postSpamMessage(senderPhone, recipientPhone, content, spamResult, bank, slot);
+        return res.status(200).json({ status: 'spam_filtered', category: spamResult.category });
+      }
     }
 
     // Get ICCID from slot status

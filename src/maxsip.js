@@ -183,8 +183,14 @@ async function processMaxsipEmail(message) {
       return;
     }
 
-    // Filter short codes as spam
-    if (isShortCode(senderPhone)) {
+    // Check for verification codes FIRST - skip spam filter for these
+    const isVerification = slack.isVerificationCode(content);
+    if (isVerification) {
+      console.log(`[MAXSIP] Verification code detected, skipping spam filter`);
+    }
+
+    // Filter short codes as spam (unless verification code)
+    if (!isVerification && isShortCode(senderPhone)) {
       console.log(`[MAXSIP] Short code filtered as spam: ${senderPhone}`);
       await slack.postSpamMessage(
         normalizedSender,
@@ -197,24 +203,21 @@ async function processMaxsipEmail(message) {
       return;
     }
 
-    // Run spam filter
-    const spamResult = await classifyMessage(content, normalizedSender);
-    if (spamResult.spam) {
-      console.log(`[MAXSIP] Spam filtered: ${senderPhone}, category=${spamResult.category}`);
-      await slack.postSpamMessage(
-        normalizedSender,
-        normalizedReceiver,
-        content,
-        spamResult,
-        'maxsip',
-        null
-      );
-      return;
-    }
-
-    // Check for verification codes - route to verification channel
-    if (slack.isVerificationCode(content)) {
-      console.log(`[MAXSIP] Verification code detected, routing to verification channel`);
+    // Run spam filter (skip if verification code)
+    if (!isVerification) {
+      const spamResult = await classifyMessage(content, normalizedSender);
+      if (spamResult.spam) {
+        console.log(`[MAXSIP] Spam filtered: ${senderPhone}, category=${spamResult.category}`);
+        await slack.postSpamMessage(
+          normalizedSender,
+          normalizedReceiver,
+          content,
+          spamResult,
+          'maxsip',
+          null
+        );
+        return;
+      }
     }
 
     // Look up deals from Monday.com
