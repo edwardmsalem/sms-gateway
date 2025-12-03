@@ -5,6 +5,19 @@ const { normalizePhone } = require('./utils');
 const { getPendingDelivery, clearPendingDelivery } = require('./deliveryTracker');
 const { updateLastKnownSlot, getSlotStatus } = require('./simbank');
 const { classifyMessage } = require('./spamFilter');
+const monday = require('./monday');
+
+/**
+ * Format phone number for display
+ */
+function formatPhone(phone) {
+  const digits = phone.replace(/\D/g, '');
+  const num = digits.startsWith('1') && digits.length === 11 ? digits.substring(1) : digits;
+  if (num.length === 10) {
+    return `(${num.substring(0, 3)}) ${num.substring(3, 6)}-${num.substring(6)}`;
+  }
+  return phone;
+}
 
 const router = express.Router();
 
@@ -183,6 +196,31 @@ router.post('/sms', async (req, res) => {
       }
     }
 
+    // Look up deals from Monday.com using receiver phone
+    let deals = [];
+    let senderAreaCode = null;
+    let senderState = null;
+    let senderStateName = null;
+    try {
+      deals = await monday.lookupDealsByPhone(recipientPhone);
+      senderAreaCode = monday.getAreaCodeFromPhone(senderPhone);
+      senderState = monday.getStateFromAreaCode(senderAreaCode);
+      senderStateName = monday.STATE_NAMES[senderState] || senderState;
+      console.log(`[MONDAY] Found ${deals.length} deals for ${recipientPhone}, sender from ${senderStateName || 'Unknown'}`);
+    } catch (err) {
+      console.warn(`[MONDAY] Lookup failed: ${err.message}`);
+    }
+
+    // Build enrichment data for Slack
+    const enrichment = {
+      deals,
+      senderAreaCode,
+      senderState,
+      senderStateName,
+      senderPhoneFormatted: formatPhone(senderPhone),
+      receiverPhoneFormatted: formatPhone(recipientPhone)
+    };
+
     // Find or create conversation
     let conversation = db.findConversation(senderPhone, recipientPhone);
     let isNewConversation = false;
@@ -221,7 +259,7 @@ router.post('/sms', async (req, res) => {
 
     // Post to Slack
     if (isNewConversation || !conversation.slack_thread_ts) {
-      const threadTs = await slack.postNewConversation(conversation, content);
+      const threadTs = await slack.postNewConversation(conversation, content, enrichment);
       db.updateConversationThread(threadTs, conversation.id);
     } else {
       const { actualThreadTs } = await slack.postInboundToThread(
@@ -229,7 +267,8 @@ router.post('/sms', async (req, res) => {
         senderPhone,
         recipientPhone,
         content,
-        conversation
+        conversation,
+        enrichment
       );
 
       if (actualThreadTs && actualThreadTs !== conversation.slack_thread_ts) {

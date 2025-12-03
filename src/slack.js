@@ -23,7 +23,7 @@ const app = new App({
 });
 
 /**
- * Build SMS message blocks for Slack
+ * Build SMS message blocks for Slack (outbound messages)
  */
 function buildSmsBlocks({ recipientDisplay, senderDisplay, content, bankId, port, timestamp, isOutbound, sentBy, iccid }) {
   const icon = isOutbound ? '📤' : '📨';
@@ -48,22 +48,100 @@ function buildSmsBlocks({ recipientDisplay, senderDisplay, content, bankId, port
 }
 
 /**
+ * Check if sender area code matches any deal's team market
+ */
+function checkAreaCodeMatch(senderAreaCode, deals) {
+  if (!senderAreaCode || !deals || deals.length === 0) return false;
+
+  const monday = require('./monday');
+  for (const deal of deals) {
+    if (deal.team) {
+      const result = monday.doesAreaCodeMatchTeam(senderAreaCode, deal.team);
+      if (result.matches) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Build enriched SMS message blocks with Monday.com deal info
+ */
+function buildEnrichedSmsBlocks({ content, bankId, port, enrichment, iccid }) {
+  const { deals, senderAreaCode, senderStateName, senderPhoneFormatted, receiverPhoneFormatted } = enrichment;
+
+  let text = '';
+
+  if (deals && deals.length > 0) {
+    // Format with deal info
+    const firstDeal = deals[0];
+    const matchIndicator = checkAreaCodeMatch(senderAreaCode, deals) ? '✅' : '⚠️';
+
+    // Header: Associate name and receiver phone
+    text += `📥 *${firstDeal.associateName}* · ${receiverPhoneFormatted}\n`;
+
+    // From line with state and match indicator
+    text += `From: ${senderPhoneFormatted} · ${senderStateName || 'Unknown'} ${matchIndicator}\n`;
+
+    // Deal line(s)
+    if (deals.length === 1) {
+      text += `Deal: ${firstDeal.team} (${firstDeal.status})`;
+      if (firstDeal.closer) text += ` @${firstDeal.closer}`;
+      text += '\n';
+    } else {
+      const dealSummary = deals.map(d => `${d.team} (${d.status})`).join(', ');
+      text += `Deals: ${dealSummary}`;
+      if (firstDeal.closer) text += ` @${firstDeal.closer}`;
+      text += '\n';
+    }
+
+    text += '\n';
+    text += `"${content}"\n\n`;
+    text += `_Reply: @SMS ${bankId} ${port} followed by your message_`;
+  } else {
+    // Format without deal info
+    text += `📥 ${receiverPhoneFormatted}\n`;
+    text += `From: ${senderPhoneFormatted} · ${senderStateName || 'Unknown'}\n\n`;
+    text += `"${content}"\n\n`;
+    text += `_Reply: @SMS ${bankId} ${port} followed by your message_`;
+  }
+
+  return [{
+    type: 'section',
+    text: { type: 'mrkdwn', text }
+  }];
+}
+
+/**
  * Post a new conversation to Slack channel
  */
-async function postNewConversation(conversation, messageContent) {
+async function postNewConversation(conversation, messageContent, enrichment) {
+  const bankId = conversation.sim_bank_id;
+  const port = conversation.sim_port;
+
+  // Use enriched blocks if enrichment data is provided
+  const blocks = enrichment
+    ? buildEnrichedSmsBlocks({
+        content: messageContent,
+        bankId,
+        port,
+        enrichment,
+        iccid: conversation.iccid
+      })
+    : buildSmsBlocks({
+        recipientDisplay: formatPhoneDisplay(conversation.recipient_phone),
+        senderDisplay: formatPhoneDisplay(conversation.sender_phone),
+        content: messageContent,
+        bankId,
+        port,
+        timestamp: formatTime(),
+        isOutbound: false,
+        iccid: conversation.iccid
+      });
+
   const result = await app.client.chat.postMessage({
     channel: CHANNEL_ID,
     text: `New SMS to ${formatPhoneDisplay(conversation.recipient_phone)}`,
-    blocks: buildSmsBlocks({
-      recipientDisplay: formatPhoneDisplay(conversation.recipient_phone),
-      senderDisplay: formatPhoneDisplay(conversation.sender_phone),
-      content: messageContent,
-      bankId: conversation.sim_bank_id,
-      port: conversation.sim_port,
-      timestamp: formatTime(),
-      isOutbound: false,
-      iccid: conversation.iccid
-    })
+    blocks
   });
 
   return result.ts;
@@ -73,22 +151,36 @@ async function postNewConversation(conversation, messageContent) {
  * Post an inbound message to existing thread
  * Returns { postedTs, actualThreadTs }
  */
-async function postInboundToThread(threadTs, senderPhone, recipientPhone, content, conversation) {
+async function postInboundToThread(threadTs, senderPhone, recipientPhone, content, conversation, enrichment) {
+  const bankId = conversation?.sim_bank_id || 'unknown';
+  const port = conversation?.sim_port || 'PORT';
+
+  // Use enriched blocks if enrichment data is provided
+  const blocks = enrichment
+    ? buildEnrichedSmsBlocks({
+        content,
+        bankId,
+        port,
+        enrichment,
+        iccid: conversation?.iccid
+      })
+    : buildSmsBlocks({
+        recipientDisplay: formatPhoneDisplay(recipientPhone),
+        senderDisplay: formatPhoneDisplay(senderPhone),
+        content,
+        bankId,
+        port,
+        timestamp: formatTime(),
+        isOutbound: false,
+        iccid: conversation?.iccid
+      });
+
   const result = await app.client.chat.postMessage({
     channel: CHANNEL_ID,
     thread_ts: threadTs,
     reply_broadcast: true,
     text: `New message from ${formatPhoneDisplay(senderPhone)}`,
-    blocks: buildSmsBlocks({
-      recipientDisplay: formatPhoneDisplay(recipientPhone),
-      senderDisplay: formatPhoneDisplay(senderPhone),
-      content,
-      bankId: conversation?.sim_bank_id || 'unknown',
-      port: conversation?.sim_port || 'PORT',
-      timestamp: formatTime(),
-      isOutbound: false,
-      iccid: conversation?.iccid
-    })
+    blocks
   });
 
   // If thread didn't exist, result.ts becomes the new thread
