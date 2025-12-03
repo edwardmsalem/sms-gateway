@@ -271,19 +271,29 @@ async function addReaction(channel, timestamp, emoji) {
  * Post a spam message to the spam channel
  */
 async function postSpamMessage(senderPhone, recipientPhone, content, spamResult, bankId, slot) {
+  const monday = require('./monday');
   const senderDisplay = formatPhoneDisplay(senderPhone);
   const recipientDisplay = formatPhoneDisplay(recipientPhone);
 
-  let text = `:no_entry: *SPAM BLOCKED*\n`;
-  text += `━━━━━━━━━━━━━━━━━━━━━━━\n`;
-  text += `*Category:* ${spamResult.category || 'Unknown'}\n`;
-  text += `*Confidence:* ${spamResult.confidence}\n`;
-  text += `━━━━━━━━━━━━━━━━━━━━━━━\n`;
-  text += `From: ${senderDisplay}\n`;
+  // Get sender state from area code
+  const senderAreaCode = monday.getAreaCodeFromPhone(senderPhone);
+  const senderState = monday.getStateFromAreaCode(senderAreaCode);
+
+  // Truncate message for preview
+  const messagePreview = content.length > 200 ? content.substring(0, 200) + '...' : content;
+
+  let text = `🚫 *Spam Blocked*\n`;
+  text += `From: ${senderDisplay} · ${senderState || 'Unknown'}\n`;
   text += `To: ${recipientDisplay}\n`;
-  if (bankId) text += `Bank ${bankId} · Slot ${slot || 'unknown'}\n`;
-  text += `━━━━━━━━━━━━━━━━━━━━━━━\n`;
-  text += `${content}`;
+
+  if (bankId === 'maxsip') {
+    text += `Source: Maxsip\n`;
+  } else if (bankId) {
+    text += `Bank: ${bankId} · Slot: ${slot || 'unknown'}\n`;
+  }
+
+  text += `Category: ${spamResult.category || 'Unknown'}\n`;
+  text += `\n"${messagePreview}"`;
 
   await app.client.chat.postMessage({
     channel: SPAM_CHANNEL_ID,
