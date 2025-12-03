@@ -36,8 +36,8 @@ const SMS_ERROR_CODES = {
   16: 'Too Many Task'
 };
 
-const SLOT_ACTIVATION_WAIT_MS = 60000;
-const PROGRESS_INTERVAL_MS = 10000;
+const SLOT_ACTIVATION_TIMEOUT_MS = 90000;
+const SLOT_POLL_INTERVAL_MS = 10000;
 
 // Track last known active slot per bank-channel from inbound SMS
 // Key: "bankId-channel" (e.g., "50004-4"), Value: slot (e.g., "4.07")
@@ -64,88 +64,103 @@ function getLastKnownSlot(bankId, channel) {
 }
 
 /**
- * Switch to a specific SIM slot before sending
+ * Activate/switch to a specific SIM slot using Ejoin API
+ * @param {object} bank - Bank configuration object
+ * @param {string} slot - Slot notation (e.g., "4.07")
  */
-async function switchToSlot(bank, slot) {
-  const switchUrl = `http://${bank.ip_address}:${bank.port}/goip_send_cmd.html?username=${encodeURIComponent(bank.username)}&password=${encodeURIComponent(bank.password)}`;
+async function activateSlot(bank, slot) {
+  // Parse slot notation: "4.07" -> channel=4, slotNum=8 (0-indexed to 1-indexed)
+  const parts = slot.split('.');
+  const channel = parts[0];
+  const slotIndex = parseInt(parts[1], 10);
+  const slotNum = slotIndex + 1; // Convert 0-indexed to 1-indexed
 
-  const switchBody = {
-    type: 'command',
-    op: 'switch',
-    ports: slot
-  };
+  const switchUrl = `http://${bank.ip_address}:${bank.port}/goip_switch_slot.html?username=${encodeURIComponent(bank.username)}&password=${encodeURIComponent(bank.password)}&port=${channel}&slot=${slotNum}`;
+
+  console.log(`[SLOT ACTIVATE] Switching bank ${bank.bank_id} to slot ${slot} (channel=${channel}, slotNum=${slotNum})`);
 
   const res = await fetch(switchUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(switchBody),
+    method: 'GET',
     signal: AbortSignal.timeout(10000)
   });
 
   const rawText = await res.text();
+  console.log(`[SLOT ACTIVATE] Response: ${rawText}`);
 
-  let response;
-  try {
-    response = JSON.parse(rawText);
-  } catch (e) {
-    // Non-JSON response, continue anyway
-    return;
-  }
-
-  if (response.code !== 0 && response.code !== 200) {
-    console.warn(`Slot switch warning - code ${response.code}: ${response.reason || 'unknown'}`);
+  if (!res.ok) {
+    throw new Error(`Slot switch failed: HTTP ${res.status}`);
   }
 
   // Brief delay for switch to take effect
-  await new Promise(resolve => setTimeout(resolve, 1000));
+  await new Promise(resolve => setTimeout(resolve, 2000));
 }
 
 /**
- * Wait for slot activation with progress updates
+ * Check if slot is ready (active === 1 AND st === 3)
  */
-async function waitForSlotActivation(slot, onProgress) {
-  const totalWaitMs = SLOT_ACTIVATION_WAIT_MS;
-  const intervalMs = PROGRESS_INTERVAL_MS;
-  const iterations = Math.floor(totalWaitMs / intervalMs);
-
-  for (let i = iterations; i > 0; i--) {
-    await new Promise(resolve => setTimeout(resolve, intervalMs));
-    const remainingSeconds = (i - 1) * (intervalMs / 1000);
-    if (remainingSeconds > 0) {
-      onProgress('waiting', `${remainingSeconds}s remaining...`);
-    }
-  }
+function isSlotReady(status) {
+  if (status.error) return false;
+  const isActive = status.active === 1 || status.active === '1';
+  const isRegistered = status.st === 3;
+  return isActive && isRegistered;
 }
 
 /**
- * Ensure slot is ready, switching and waiting if needed
- * Uses lastKnownSlot tracker (updated from inbound SMS) to skip wait when slot is already active
+ * Ensure slot is ready, checking status and activating if needed
+ * Polls status every 10 seconds until ready or timeout (90s)
  */
 async function ensureSlotReady(bank, slot, onProgress) {
   if (!slot || !slot.includes('.')) return;
 
-  const channel = slot.split('.')[0];
-  const currentSlot = getLastKnownSlot(bank.bank_id, channel);
+  onProgress('checking', `Checking status of slot ${slot}...`);
 
-  onProgress('checking', `Checking if slot ${slot} is active...`);
+  // Check current status
+  let status = await getSlotStatus(bank.bank_id, slot);
 
-  if (currentSlot === slot) {
-    onProgress('ready', `Slot ${slot} is already active (tracked from inbound SMS)`);
+  if (status.error) {
+    throw new Error(`Failed to get slot status: ${status.error}`);
+  }
+
+  // If already ready, send immediately
+  if (isSlotReady(status)) {
+    onProgress('ready', `Slot ${slot} is ready (active=${status.active}, st=${status.st})`);
     return;
   }
 
-  // Need to switch and wait - either unknown or different slot
-  if (currentSlot) {
-    onProgress('switching', `Switching from ${currentSlot} to ${slot}...`);
-  } else {
-    onProgress('switching', `Activating slot ${slot} (no prior activity tracked)...`);
+  // Need to activate the slot
+  onProgress('switching', `Activating slot ${slot}...`);
+  await activateSlot(bank, slot);
+
+  // Poll status until ready or timeout
+  const startTime = Date.now();
+  const timeoutMs = SLOT_ACTIVATION_TIMEOUT_MS;
+  const pollIntervalMs = SLOT_POLL_INTERVAL_MS;
+
+  while (Date.now() - startTime < timeoutMs) {
+    const elapsed = Math.round((Date.now() - startTime) / 1000);
+    const remaining = Math.round((timeoutMs - (Date.now() - startTime)) / 1000);
+
+    onProgress('waiting', `Waiting for registration... (${elapsed}s elapsed, ${remaining}s remaining)`);
+
+    await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+
+    status = await getSlotStatus(bank.bank_id, slot);
+
+    if (status.error) {
+      console.warn(`[SLOT POLL] Status check failed: ${status.error}`);
+      continue;
+    }
+
+    console.log(`[SLOT POLL] ${slot}: active=${status.active}, st=${status.st} (${status.statusText})`);
+
+    if (isSlotReady(status)) {
+      onProgress('ready', `Slot ${slot} is ready`);
+      return;
+    }
   }
 
-  await switchToSlot(bank, slot);
-
-  onProgress('waiting', `Waiting 60s for slot ${slot} to register...`);
-  await waitForSlotActivation(slot, onProgress);
-  onProgress('ready', `Slot ${slot} activation complete`);
+  // Timeout reached
+  throw new Error(`Slot ${slot} did not become ready within ${timeoutMs / 1000} seconds (last status: ${status.statusText})`);
 }
 
 /**

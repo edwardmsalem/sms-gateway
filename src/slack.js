@@ -179,9 +179,17 @@ function formatSlotStatusForSlack(status) {
   const activeIcon = status.active === 1 || status.active === '1' ? ':white_check_mark: Yes' : ':x: No';
   const activeValue = status.active;
 
+  // Status icon: green for ready (3), yellow for registering (2), red for others
+  let statusIcon = ':x:';
+  if (status.st === 3) {
+    statusIcon = ':white_check_mark:';
+  } else if (status.st === 2) {
+    statusIcon = ':hourglass_flowing_sand:';
+  }
+
   let text = `:bar_chart: *Status for ${status.bankId} slot ${status.slot}*\n`;
   text += `• *Active:* ${activeIcon} (${activeValue})\n`;
-  text += `• *Status:* ${status.statusText} (${status.st})\n`;
+  text += `• *Status:* ${statusIcon} ${status.statusText} (${status.st})\n`;
   text += `• *Phone:* ${status.sn}\n`;
   text += `• *Signal:* ${status.sig !== undefined ? `${status.sig} dBm` : 'N/A'}\n`;
   text += `• *Balance:* ${status.bal}\n`;
