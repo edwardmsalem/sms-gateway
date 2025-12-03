@@ -9,6 +9,31 @@ const CHANNEL_ID = process.env.SLACK_CHANNEL_ID;
 const SPAM_CHANNEL_ID = 'C0A1EUF2D36';
 const VERIFICATION_CHANNEL_ID = 'C05KCUMN35M';
 
+// Spam threading: key = "sender|contentHash", value = { thread_ts, channel, count, timestamp, parentTs }
+const spamThreads = new Map();
+const SPAM_THREAD_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+/**
+ * Generate a spam key from sender and content
+ */
+function getSpamKey(senderPhone, content) {
+  // Use first 100 chars of content to create key
+  const contentKey = content.substring(0, 100).toLowerCase().trim();
+  return `${senderPhone}|${contentKey}`;
+}
+
+/**
+ * Clean up expired spam threads
+ */
+function cleanupSpamThreads() {
+  const now = Date.now();
+  for (const [key, data] of spamThreads) {
+    if (now - data.timestamp > SPAM_THREAD_EXPIRY_MS) {
+      spamThreads.delete(key);
+    }
+  }
+}
+
 /**
  * Check if message contains a verification code from known services
  * Returns true if message should be routed to verification channel
@@ -269,7 +294,8 @@ async function addReaction(channel, timestamp, emoji) {
 }
 
 /**
- * Post a spam message to the spam channel
+ * Post a spam message to the spam channel with threading
+ * Groups identical spam (same sender + content) into threads
  */
 async function postSpamMessage(senderPhone, recipientPhone, content, spamResult, bankId, slot) {
   const monday = require('./monday');
@@ -280,28 +306,85 @@ async function postSpamMessage(senderPhone, recipientPhone, content, spamResult,
   const senderAreaCode = monday.getAreaCodeFromPhone(senderPhone);
   const senderState = monday.getStateFromAreaCode(senderAreaCode);
 
-  // Truncate message for preview
-  const messagePreview = content.length > 200 ? content.substring(0, 200) + '...' : content;
+  // Clean up expired threads
+  cleanupSpamThreads();
 
-  let text = `🚫 *Spam Blocked*\n`;
-  text += `From: ${senderDisplay} · ${senderState || 'Unknown'}\n`;
-  text += `To: ${recipientDisplay}\n`;
+  // Check if we have an existing thread for this spam
+  const spamKey = getSpamKey(senderPhone, content);
+  const existingThread = spamThreads.get(spamKey);
 
-  if (bankId === 'maxsip') {
-    text += `Source: Maxsip\n`;
-  } else if (bankId) {
-    text += `Bank: ${bankId} · Slot: ${slot || 'unknown'}\n`;
+  if (existingThread) {
+    // Reply in existing thread
+    existingThread.count++;
+    existingThread.timestamp = Date.now();
+
+    // Post reply in thread
+    await app.client.chat.postMessage({
+      channel: SPAM_CHANNEL_ID,
+      thread_ts: existingThread.thread_ts,
+      text: `Also sent to: ${recipientDisplay}`,
+      unfurl_links: false,
+      unfurl_media: false
+    });
+
+    // Update parent message with new count
+    const messagePreview = content.length > 200 ? content.substring(0, 200) + '...' : content;
+    let parentText = `🚫 *Spam Blocked (${existingThread.count} recipients)*\n`;
+    parentText += `From: ${senderDisplay} · ${senderState || 'Unknown'}\n`;
+    if (bankId === 'maxsip') {
+      parentText += `Source: Maxsip\n`;
+    } else if (bankId) {
+      parentText += `Bank: ${bankId} · Slot: ${slot || 'unknown'}\n`;
+    }
+    parentText += `Category: ${spamResult.category || 'Unknown'}\n`;
+    parentText += `\n"${messagePreview}"`;
+
+    try {
+      await app.client.chat.update({
+        channel: SPAM_CHANNEL_ID,
+        ts: existingThread.parentTs,
+        text: parentText
+      });
+    } catch (err) {
+      console.error('Failed to update spam parent message:', err.message);
+    }
+
+    console.log(`[SPAM THREAD] Added to thread ${existingThread.thread_ts}, count: ${existingThread.count}`);
+  } else {
+    // Create new parent message
+    const messagePreview = content.length > 200 ? content.substring(0, 200) + '...' : content;
+
+    let text = `🚫 *Spam Blocked*\n`;
+    text += `From: ${senderDisplay} · ${senderState || 'Unknown'}\n`;
+    text += `To: ${recipientDisplay}\n`;
+
+    if (bankId === 'maxsip') {
+      text += `Source: Maxsip\n`;
+    } else if (bankId) {
+      text += `Bank: ${bankId} · Slot: ${slot || 'unknown'}\n`;
+    }
+
+    text += `Category: ${spamResult.category || 'Unknown'}\n`;
+    text += `\n"${messagePreview}"`;
+
+    const result = await app.client.chat.postMessage({
+      channel: SPAM_CHANNEL_ID,
+      text,
+      unfurl_links: false,
+      unfurl_media: false
+    });
+
+    // Store thread info
+    spamThreads.set(spamKey, {
+      thread_ts: result.ts,
+      parentTs: result.ts,
+      channel: SPAM_CHANNEL_ID,
+      count: 1,
+      timestamp: Date.now()
+    });
+
+    console.log(`[SPAM THREAD] Created new thread ${result.ts} for ${senderDisplay}`);
   }
-
-  text += `Category: ${spamResult.category || 'Unknown'}\n`;
-  text += `\n"${messagePreview}"`;
-
-  await app.client.chat.postMessage({
-    channel: SPAM_CHANNEL_ID,
-    text,
-    unfurl_links: false,
-    unfurl_media: false
-  });
 }
 
 /**
