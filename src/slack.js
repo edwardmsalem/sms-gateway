@@ -783,26 +783,27 @@ app.command('/status', async ({ command, ack, respond }) => {
  * Usage: /sweep-test
  */
 app.command('/sweep-test', async ({ command, ack, respond }) => {
+  // Acknowledge immediately to avoid Slack timeout
   await ack();
 
   // Check if a test is already running
   if (sweepTest.getActiveTest()) {
-    await respond({
+    respond({
       response_type: 'ephemeral',
       text: 'A sweep test is already in progress. Please wait for it to complete.'
     });
     return;
   }
 
-  const bankId = '50004';
-
-  await respond({
+  // Respond immediately - don't await
+  respond({
     response_type: 'ephemeral',
-    text: `Starting sweep test for bank ${bankId}. This will take approximately 3 minutes. Results will be posted to <#${sweepTest.TEST_CHANNEL_ID}>.`
+    text: `🧪 Sweep test starting...`
   });
 
-  try {
-    // Run the test asynchronously (don't await - let it run in background)
+  // Run the test fully asynchronously in the background
+  const bankId = '50004';
+  setImmediate(() => {
     sweepTest.runSweepTest(app, bankId).catch(error => {
       console.error('Sweep test failed:', error.message);
       app.client.chat.postMessage({
@@ -810,13 +811,7 @@ app.command('/sweep-test', async ({ command, ack, respond }) => {
         text: `:x: Sweep test failed: ${error.message}`
       }).catch(e => console.error('Failed to post error message:', e.message));
     });
-  } catch (error) {
-    console.error('Failed to start sweep test:', error.message);
-    await respond({
-      response_type: 'ephemeral',
-      text: `Failed to start sweep test: ${error.message}`
-    });
-  }
+  });
 });
 
 /**
