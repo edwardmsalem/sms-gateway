@@ -6,6 +6,9 @@ const { trackOutboundSms } = require('./deliveryTracker');
 
 const CHANNEL_ID = process.env.SLACK_CHANNEL_ID;
 
+// Approved Slack user IDs who can send SMS via @SMS command
+const APPROVED_SMS_USERS = ['U05BRER83HT', 'U08FY4FAJ9J', 'U0144K906KA'];
+
 // Create an ExpressReceiver so we can mount it on our Express app
 const receiver = new ExpressReceiver({
   signingSecret: process.env.SLACK_SIGNING_SECRET,
@@ -32,7 +35,7 @@ function buildSmsBlocks({ recipientDisplay, senderDisplay, content, bankId, port
     if (bankId) text += `\n📍 Bank ${bankId} · Port ${port}`;
     text += `\nSent by: <@${sentBy}> | ${timestamp}`;
   } else {
-    text += `From: ${senderDisplay}\n📍 *Bank ${bankId} · Port ${port}*\nReceived: ${timestamp}\n\n_Reply: @SMS ${port} [message]_`;
+    text += `From: ${senderDisplay}\n📍 *Bank ${bankId} · Slot ${port}*\nReceived: ${timestamp}\n\n_Reply: @SMS ${bankId} ${port} followed by your message_`;
   }
 
   return [{
@@ -242,10 +245,19 @@ app.event('app_mention', async ({ event, say }) => {
     return;
   }
 
+  // Check if user is authorized to send SMS
+  if (!APPROVED_SMS_USERS.includes(event.user)) {
+    await say({
+      text: ':no_entry: You are not authorized to send SMS via this bot.',
+      thread_ts: event.thread_ts || event.ts
+    });
+    return;
+  }
+
   // Must be in a thread for SMS sending
   if (!event.thread_ts) {
     await say({
-      text: 'Please use @SMS in a conversation thread.\nUsage: `@SMS [bank] [slot] [message]`\nExample: `@SMS 50004 4.07 Hello there`',
+      text: 'Please use @SMS in a conversation thread.\nUsage: `@SMS <bank> <slot> <your message>`\nExample: `@SMS 50004 4.07 Hello there`',
       thread_ts: event.ts
     });
     return;
@@ -259,7 +271,7 @@ app.event('app_mention', async ({ event, say }) => {
   // Validate bank format (e.g., "50004")
   if (!specifiedBank || !/^\d{5}$/.test(specifiedBank)) {
     await say({
-      text: `Invalid format. Bank ID is required (5 digits).\nUsage: \`@SMS [bank] [slot] [message]\`\nExample: \`@SMS 50004 4.07 Hello there\``,
+      text: `Invalid format. Bank ID is required (5 digits).\nUsage: \`@SMS <bank> <slot> <your message>\`\nExample: \`@SMS 50004 4.07 Hello there\``,
       thread_ts: event.thread_ts
     });
     return;
@@ -268,7 +280,7 @@ app.event('app_mention', async ({ event, say }) => {
   // Validate slot format (e.g., "4.07", "1.01")
   if (!specifiedSlot || !/^\d+\.\d+$/.test(specifiedSlot)) {
     await say({
-      text: `Invalid format. Slot is required.\nUsage: \`@SMS [bank] [slot] [message]\`\nExample: \`@SMS ${specifiedBank} 4.07 Hello there\``,
+      text: `Invalid format. Slot is required.\nUsage: \`@SMS <bank> <slot> <your message>\`\nExample: \`@SMS ${specifiedBank} 4.07 Hello there\``,
       thread_ts: event.thread_ts
     });
     return;
@@ -276,7 +288,7 @@ app.event('app_mention', async ({ event, say }) => {
 
   if (!message) {
     await say({
-      text: `Message is required.\nUsage: \`@SMS ${specifiedBank} ${specifiedSlot} [message]\``,
+      text: `Message is required.\nUsage: \`@SMS ${specifiedBank} ${specifiedSlot} <your message>\``,
       thread_ts: event.thread_ts
     });
     return;
