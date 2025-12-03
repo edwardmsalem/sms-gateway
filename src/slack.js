@@ -78,7 +78,7 @@ function buildEnrichedSmsBlocks({ content, bankId, port, enrichment, iccid }) {
     const matchIndicator = checkAreaCodeMatch(senderAreaCode, deals) ? '✅' : '⚠️';
 
     // Header: Associate name and receiver phone
-    text += `📥 *${firstDeal.associateName}* · ${receiverPhoneFormatted}\n`;
+    text += `📥 *New SMS to ${firstDeal.associateName}* · ${receiverPhoneFormatted}\n`;
 
     // From line with state and match indicator
     text += `From: ${senderPhoneFormatted} · ${senderStateName || 'Unknown'} ${matchIndicator}\n`;
@@ -103,7 +103,7 @@ function buildEnrichedSmsBlocks({ content, bankId, port, enrichment, iccid }) {
     text += `_Reply: @SMS ${bankId} ${port} followed by your message_`;
   } else {
     // Format without deal info
-    text += `📥 ${receiverPhoneFormatted}\n`;
+    text += `📥 *New SMS to ${receiverPhoneFormatted}*\n`;
     text += `From: ${senderPhoneFormatted} · ${senderStateName || 'Unknown'}\n\n`;
     text += `"${content}"\n\n`;
     text += `_Reply: @SMS ${bankId} ${port} followed by your message_`;
