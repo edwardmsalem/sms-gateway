@@ -475,14 +475,16 @@ async function startTextchestWatch(slackApp, email, slackChannel, threadTs) {
       watchKey = normalizePhone(textchestNumber.number);
 
       await postToThread(slackApp, slackChannel, threadTs,
-        `✅ Found Textchest: ${phoneDisplay}`);
+        `✅ Found Textchest: ${phoneDisplay}. Activating...`);
 
       // Activate Textchest SIM
       try {
-        await textchest.activateSim(textchestNumber.number);
+        const activateResult = await textchest.activateSim(textchestNumber.number);
+        await postToThread(slackApp, slackChannel, threadTs,
+          `📱 Activated (slot ${activateResult.slot})`);
       } catch (err) {
         await postToThread(slackApp, slackChannel, threadTs,
-          `⚠️ Could not activate SIM: ${err.message}`);
+          `⚠️ Could not activate: ${err.message}`);
       }
     } else {
       // Step 2: Try Monday.com for SS number
