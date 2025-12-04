@@ -1,13 +1,40 @@
 /**
  * Ticketmaster Code Watch Module
- * Monitors for Ticketmaster verification codes via Ejoin or Textchest
+ * Monitors for Ticketmaster verification codes via Ejoin, Textchest, or Gmail
  */
 
+const { google } = require('googleapis');
 const db = require('./database');
 const monday = require('./monday');
 const simbank = require('./simbank');
 const textchest = require('./textchest');
 const { normalizePhone, formatPhoneDisplay } = require('./utils');
+
+// Gmail client (lazily initialized)
+let gmail = null;
+
+/**
+ * Initialize Gmail client if not already done
+ */
+function getGmailClient() {
+  if (gmail) return gmail;
+
+  if (!process.env.GMAIL_CLIENT_ID || !process.env.GMAIL_CLIENT_SECRET || !process.env.GMAIL_REFRESH_TOKEN) {
+    return null;
+  }
+
+  const oauth2Client = new google.auth.OAuth2(
+    process.env.GMAIL_CLIENT_ID,
+    process.env.GMAIL_CLIENT_SECRET
+  );
+
+  oauth2Client.setCredentials({
+    refresh_token: process.env.GMAIL_REFRESH_TOKEN
+  });
+
+  gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+  return gmail;
+}
 
 // Active watches: Map<normalizedPhone, { endTime, threadTs, slackChannel, source: 'ejoin'|'textchest' }>
 const activeWatches = new Map();
@@ -296,8 +323,187 @@ function cleanupExpiredWatches() {
 // Run cleanup every minute
 setInterval(cleanupExpiredWatches, 60 * 1000);
 
+/**
+ * Poll Gmail for Ticketmaster emails to a specific email address
+ */
+async function pollGmailForTicketmaster(slackApp, watch, email) {
+  const gmailClient = getGmailClient();
+  if (!gmailClient) {
+    console.log('[TM WATCH] Gmail not configured, skipping email monitoring');
+    return;
+  }
+
+  const startTime = Math.floor(Date.now() / 1000);
+
+  const pollInterval = setInterval(async () => {
+    // Check if watch is still active
+    if (Date.now() > watch.endTime) {
+      clearInterval(pollInterval);
+      return;
+    }
+
+    try {
+      // Search for Ticketmaster emails to/from this email address
+      const response = await gmailClient.users.messages.list({
+        userId: 'me',
+        q: `{to:${email} from:${email}} subject:ticketmaster newer_than:1h is:unread`,
+        maxResults: 10
+      });
+
+      const messages = response.data.messages || [];
+
+      for (const msg of messages) {
+        // Skip if already posted
+        if (!watch.postedEmails) watch.postedEmails = new Set();
+        if (watch.postedEmails.has(msg.id)) continue;
+
+        // Get email content
+        const fullMessage = await gmailClient.users.messages.get({
+          userId: 'me',
+          id: msg.id,
+          format: 'full'
+        });
+
+        const headers = fullMessage.data.payload.headers;
+        const subject = headers.find(h => h.name.toLowerCase() === 'subject')?.value || 'No subject';
+        const from = headers.find(h => h.name.toLowerCase() === 'from')?.value || 'Unknown';
+
+        // Extract body
+        let body = '';
+        const payload = fullMessage.data.payload;
+        if (payload.body?.data) {
+          body = Buffer.from(payload.body.data, 'base64').toString('utf8');
+        } else if (payload.parts) {
+          const textPart = payload.parts.find(p => p.mimeType === 'text/plain');
+          if (textPart?.body?.data) {
+            body = Buffer.from(textPart.body.data, 'base64').toString('utf8');
+          }
+        }
+
+        // Extract verification code if present (6-digit code pattern)
+        const codeMatch = body.match(/\b(\d{6})\b/);
+        const code = codeMatch ? codeMatch[1] : null;
+
+        watch.postedEmails.add(msg.id);
+
+        // Post to thread
+        let message = `📧 Ticketmaster email found!\nFrom: ${from}\nSubject: ${subject}`;
+        if (code) {
+          message += `\n\n🎫 *Code: ${code}*`;
+        }
+
+        await postToThread(slackApp, watch.slackChannel, watch.threadTs, message);
+
+        // Mark as read
+        await gmailClient.users.messages.modify({
+          userId: 'me',
+          id: msg.id,
+          requestBody: { removeLabelIds: ['UNREAD'] }
+        });
+      }
+    } catch (err) {
+      console.error('[TM WATCH] Gmail poll error:', err.message);
+    }
+  }, TEXTCHEST_POLL_INTERVAL_MS);
+
+  // Store interval reference
+  watch.gmailPollInterval = pollInterval;
+}
+
+/**
+ * Start a simplified Textchest-only watch (no Monday.com)
+ * Also monitors Gmail for Ticketmaster emails
+ * @param {object} slackApp - Slack Bolt app instance
+ * @param {string} email - Email address to search for
+ * @param {string} slackChannel - Slack channel ID
+ * @param {string} threadTs - Thread timestamp for replies
+ */
+async function startTextchestWatch(slackApp, email, slackChannel, threadTs) {
+  try {
+    // Step 1: Search Textchest for phone number by email
+    await postToThread(slackApp, slackChannel, threadTs,
+      `🔍 Searching Textchest for number linked to ${email}...`);
+
+    const textchestNumber = await textchest.findNumberByEmail(email);
+
+    if (textchestNumber) {
+      const phoneDisplay = formatPhoneDisplay(textchestNumber.number);
+      await postToThread(slackApp, slackChannel, threadTs,
+        `✅ Found Textchest number: ${phoneDisplay}. Activating...`);
+
+      // Restart the SIM
+      try {
+        await textchest.restartSim(textchestNumber.number);
+        await postToThread(slackApp, slackChannel, threadTs,
+          `📱 SIM activated. Watching SMS + Email for Ticketmaster codes for 10 minutes...`);
+      } catch (err) {
+        await postToThread(slackApp, slackChannel, threadTs,
+          `⚠️ Could not restart SIM: ${err.message}. Still watching...`);
+      }
+
+      // Create watch
+      const normalized = normalizePhone(textchestNumber.number);
+      const watch = {
+        endTime: Date.now() + WATCH_DURATION_MS,
+        threadTs,
+        slackChannel,
+        source: 'textchest',
+        email,
+        postedMessages: new Set(),
+        postedEmails: new Set()
+      };
+      activeWatches.set(normalized, watch);
+
+      // Start SMS polling
+      await startTextchestPolling(slackApp, watch, textchestNumber.number);
+
+      // Start Gmail polling
+      pollGmailForTicketmaster(slackApp, watch, email);
+
+      console.log(`[TM WATCH] Started Textchest+Gmail watch for ${phoneDisplay}`);
+      return;
+    }
+
+    // Not found in Textchest - still monitor Gmail
+    await postToThread(slackApp, slackChannel, threadTs,
+      `⚠️ No Textchest number found for ${email}. Watching Gmail only for 10 minutes...`);
+
+    // Create watch without phone
+    const watch = {
+      endTime: Date.now() + WATCH_DURATION_MS,
+      threadTs,
+      slackChannel,
+      source: 'gmail-only',
+      email,
+      postedEmails: new Set()
+    };
+    activeWatches.set(email, watch);
+
+    // Start Gmail polling only
+    pollGmailForTicketmaster(slackApp, watch, email);
+
+    // Set cleanup timer
+    setTimeout(async () => {
+      if (watch.gmailPollInterval) {
+        clearInterval(watch.gmailPollInterval);
+      }
+      activeWatches.delete(email);
+      await postToThread(slackApp, slackChannel, threadTs,
+        "⏱️ Watch complete. No more monitoring.");
+    }, WATCH_DURATION_MS);
+
+    console.log(`[TM WATCH] Started Gmail-only watch for ${email}`);
+
+  } catch (error) {
+    console.error('[TM WATCH] Error:', error.message);
+    await postToThread(slackApp, slackChannel, threadTs,
+      `❌ Error: ${error.message}`);
+  }
+}
+
 module.exports = {
   startTicketmasterWatch,
+  startTextchestWatch,
   checkWatchAndNotify,
   hasActiveWatch,
   getActiveWatch

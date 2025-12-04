@@ -517,6 +517,30 @@ app.event('app_mention', async ({ event, say }) => {
     return;
   }
 
+  // Check if this is an email (Ticketmaster code watch)
+  const emailMatch = parts[0]?.match(/^([^\s@]+@[^\s@]+\.[^\s@]+)$/i);
+  if (emailMatch) {
+    const email = emailMatch[1];
+    await say({
+      text: `🎫 Starting Ticketmaster code watch for ${email}...`,
+      thread_ts: event.ts
+    });
+
+    // Start the Textchest-only watch asynchronously
+    setImmediate(() => {
+      ticketmasterWatch.startTextchestWatch(app, email, event.channel, event.ts)
+        .catch(error => {
+          console.error('[TMCODE] Textchest watch failed:', error.message);
+          app.client.chat.postMessage({
+            channel: event.channel,
+            thread_ts: event.ts,
+            text: `:x: Error: ${error.message}`
+          }).catch(e => console.error('[TMCODE] Failed to post error:', e.message));
+        });
+    });
+    return;
+  }
+
   // Check if user is authorized to send SMS
   if (!APPROVED_SMS_USERS.includes(event.user)) {
     await say({
