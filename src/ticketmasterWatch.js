@@ -43,8 +43,8 @@ const activeWatches = new Map();
 // Watch duration: 10 minutes
 const WATCH_DURATION_MS = 10 * 60 * 1000;
 
-// Textchest polling interval: 30 seconds
-const TEXTCHEST_POLL_INTERVAL_MS = 30 * 1000;
+// Polling interval: 10 seconds (more responsive for codes)
+const POLL_INTERVAL_MS = 10 * 1000;
 
 /**
  * Check if a phone number has an active watch
@@ -156,7 +156,7 @@ async function startTextchestPolling(slackApp, watch, number) {
     } catch (err) {
       console.error('[TM WATCH] Textchest poll error:', err.message);
     }
-  }, TEXTCHEST_POLL_INTERVAL_MS);
+  }, POLL_INTERVAL_MS);
 
   // Store interval reference for cleanup
   watch.pollInterval = pollInterval;
@@ -344,11 +344,11 @@ async function pollGmailForTicketmaster(slackApp, watch, email) {
     }
 
     try {
-      // Search for Ticketmaster code emails
+      // Search for Ticketmaster code emails (don't require unread - track by ID instead)
       // Subject patterns: "Your Authentication Code" or "Your request to reset password"
       const response = await gmailClient.users.messages.list({
         userId: 'me',
-        q: `(subject:"authentication code" OR subject:"reset password") newer_than:1h is:unread`,
+        q: `(subject:"authentication code" OR subject:"reset password") newer_than:10m`,
         maxResults: 10
       });
 
@@ -426,7 +426,7 @@ async function pollGmailForTicketmaster(slackApp, watch, email) {
     } catch (err) {
       console.error('[TM WATCH] Gmail poll error:', err.message);
     }
-  }, TEXTCHEST_POLL_INTERVAL_MS);
+  }, POLL_INTERVAL_MS);
 
   // Store interval reference
   watch.gmailPollInterval = pollInterval;
