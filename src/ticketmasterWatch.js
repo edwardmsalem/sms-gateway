@@ -469,7 +469,10 @@ async function startTextchestWatch(slackApp, email, slackChannel, threadTs) {
           `⚠️ Could not activate SIM: ${err.message}`);
       }
     } else {
-      // Step 2: Try Monday.com / Ejoin
+      // Step 2: Try Monday.com for SS number
+      await postToThread(slackApp, slackChannel, threadTs,
+        `Not in Textchest. Checking Monday.com...`);
+
       const associate = await monday.searchAssociateByEmail(email);
 
       if (associate) {
@@ -477,28 +480,31 @@ async function startTextchestWatch(slackApp, email, slackChannel, threadTs) {
         const slotInfo = findSlotByPhone(associate.phone);
 
         if (slotInfo) {
-          smsSource = 'ejoin';
+          smsSource = 'ss';
           watchKey = normalizePhone(associate.phone);
 
           await postToThread(slackApp, slackChannel, threadTs,
-            `✅ Found Monday.com: ${associate.name} · ${phoneDisplay}`);
+            `✅ Found SS number: ${associate.name} · ${phoneDisplay}`);
 
-          // Activate Ejoin slot
+          // Activate slot
           const bank = db.getSimBank(slotInfo.bankId);
           if (bank) {
             try {
               await simbank.activateSlot(bank, slotInfo.slot);
               await postToThread(slackApp, slackChannel, threadTs,
-                `📱 Ejoin activated (${slotInfo.bankId} / ${slotInfo.slot})`);
+                `📱 SS number activated`);
             } catch (err) {
               await postToThread(slackApp, slackChannel, threadTs,
-                `⚠️ Could not activate slot: ${err.message}`);
+                `⚠️ Could not activate: ${err.message}`);
             }
           }
         } else {
           await postToThread(slackApp, slackChannel, threadTs,
-            `Found in Monday.com but no Ejoin slot for ${phoneDisplay}`);
+            `Found ${associate.name} but no active SS number`);
         }
+      } else {
+        await postToThread(slackApp, slackChannel, threadTs,
+          `Not found in Monday.com`);
       }
     }
 
@@ -523,9 +529,9 @@ async function startTextchestWatch(slackApp, email, slackChannel, threadTs) {
     pollGmailForTicketmaster(slackApp, watch, email);
 
     // Summary message
-    const smsStatus = smsSource ? `SMS (${smsSource})` : 'No SMS';
+    const smsStatus = smsSource ? `SMS` : 'Email only';
     await postToThread(slackApp, slackChannel, threadTs,
-      `👁️ Watching: ${smsStatus} + Email for 10 minutes...`);
+      `👁️ Watching ${smsStatus === 'SMS' ? 'SMS + Email' : 'Email only'} for 10 minutes...`);
 
     // Set cleanup timer
     setTimeout(() => {
