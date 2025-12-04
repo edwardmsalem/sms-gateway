@@ -452,6 +452,63 @@ function formatStatusForSlack(status) {
   return `*Bank ${status.bankId}*: :green_circle: Online - ${readyCount}/${totalCount} SIMs ready\n${portDetails}`;
 }
 
+/**
+ * Find which bank/slot has a specific phone number
+ * @param {string} phone - Phone number to search for (will be normalized)
+ * @returns {Promise<{bankId: string, slot: string, status: object}|null>}
+ */
+async function findSlotByPhone(phone) {
+  // Normalize phone - strip to digits only
+  const searchPhone = phone.replace(/\D/g, '');
+  // Also try without leading 1 for US numbers
+  const searchPhoneNoCountry = searchPhone.replace(/^1/, '');
+
+  const banks = db.getAllSimBanks();
+
+  for (const bank of banks) {
+    try {
+      const url = `http://${bank.ip_address}:${bank.port}/goip_get_status.html?username=${encodeURIComponent(bank.username)}&password=${encodeURIComponent(bank.password)}&all_slots=1`;
+
+      const response = await fetch(url, {
+        method: 'GET',
+        signal: AbortSignal.timeout(10000)
+      });
+
+      if (!response.ok) continue;
+
+      const data = await response.json();
+      const statusArray = data.status || data;
+
+      if (!Array.isArray(statusArray)) continue;
+
+      for (const slotData of statusArray) {
+        const slotSn = String(slotData.sn || '').replace(/\D/g, '');
+        const slotSnNoCountry = slotSn.replace(/^1/, '');
+
+        if (slotSn === searchPhone || slotSnNoCountry === searchPhoneNoCountry ||
+            slotSn === searchPhoneNoCountry || slotSnNoCountry === searchPhone) {
+          const statusCode = parseInt(slotData.st, 10);
+          return {
+            bankId: bank.bank_id,
+            slot: String(slotData.port),
+            status: {
+              active: slotData.active,
+              st: statusCode,
+              statusText: PORT_STATUS[statusCode] || 'Unknown',
+              sn: slotData.sn
+            }
+          };
+        }
+      }
+    } catch (err) {
+      console.error(`[SIMBANK] Error querying bank ${bank.bank_id}:`, err.message);
+      continue;
+    }
+  }
+
+  return null;
+}
+
 module.exports = {
   sendSms,
   getStatus,
@@ -461,5 +518,6 @@ module.exports = {
   formatStatusForSlack,
   updateLastKnownSlot,
   activateSlot,
+  findSlotByPhone,
   PORT_STATUS
 };

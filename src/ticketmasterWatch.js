@@ -493,14 +493,19 @@ async function startTextchestWatch(slackApp, email, slackChannel, threadTs) {
 
       if (associate) {
         phoneDisplay = formatPhoneDisplay(associate.phone);
-        const slotInfo = findSlotByPhone(associate.phone);
+
+        await postToThread(slackApp, slackChannel, threadTs,
+          `Found ${associate.name} · ${phoneDisplay}. Searching SIM banks...`);
+
+        // Query SIM banks directly to find which slot has this number
+        const slotInfo = await simbank.findSlotByPhone(associate.phone);
 
         if (slotInfo) {
           smsSource = 'ss';
           watchKey = normalizePhone(associate.phone);
 
           await postToThread(slackApp, slackChannel, threadTs,
-            `✅ Found SS number: ${associate.name} · ${phoneDisplay}`);
+            `✅ Found on Bank ${slotInfo.bankId} Slot ${slotInfo.slot}`);
 
           // Activate slot
           const bank = db.getSimBank(slotInfo.bankId);
@@ -515,8 +520,9 @@ async function startTextchestWatch(slackApp, email, slackChannel, threadTs) {
             }
           }
         } else {
+          // Phone not found on any SIM bank
           await postToThread(slackApp, slackChannel, threadTs,
-            `Found ${associate.name} but no active SS number`);
+            `⚠️ ${phoneDisplay} not found on any SIM bank`);
         }
       } else {
         await postToThread(slackApp, slackChannel, threadTs,
