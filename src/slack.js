@@ -36,6 +36,17 @@ function cleanupSpamThreads() {
 }
 
 /**
+ * Defang URLs to prevent Slack from making them clickable
+ * Replaces . with [.] in URLs
+ */
+function defangUrls(text) {
+  // Match URLs (http, https, or www)
+  return text.replace(/https?:\/\/[^\s]+|www\.[^\s]+/gi, (url) => {
+    return url.replace(/\./g, '[.]');
+  });
+}
+
+/**
  * Check if message contains a verification code from known services
  * Only email providers and ticket websites bypass spam filter
  */
@@ -334,7 +345,7 @@ async function postSpamMessage(senderPhone, recipientPhone, content, spamResult,
 
     // Update parent message with new count
     const messagePreview = content.length > 300 ? content.substring(0, 300) + '...' : content;
-    let parentText = `🚫 *${messagePreview}*\n\n`;
+    let parentText = `🚫 *${messagePreview}* \n\n`;
     parentText += `_${existingThread.count} recipients · ${senderDisplay} · ${senderState || 'Unknown'}`;
     if (bankId === 'maxsip') {
       parentText += ` · Maxsip`;
@@ -356,7 +367,7 @@ async function postSpamMessage(senderPhone, recipientPhone, content, spamResult,
     // Create new parent message - message text is the hero
     const messagePreview = content.length > 300 ? content.substring(0, 300) + '...' : content;
 
-    let text = `🚫 *${messagePreview}*\n\n`;
+    let text = `🚫 *${messagePreview}* \n\n`;
     text += `_${senderDisplay} → ${recipientDisplay} · ${senderState || 'Unknown'}`;
     if (bankId === 'maxsip') {
       text += ` · Maxsip`;
@@ -503,6 +514,30 @@ app.event('app_mention', async ({ event, say }) => {
       });
       await addReaction(event.channel, event.ts, 'x');
     }
+    return;
+  }
+
+  // Check if this is an email (Ticketmaster code watch)
+  const emailMatch = parts[0]?.match(/^([^\s@]+@[^\s@]+\.[^\s@]+)$/i);
+  if (emailMatch) {
+    const email = emailMatch[1];
+    await say({
+      text: `🎫 Starting Ticketmaster code watch for ${email}...`,
+      thread_ts: event.ts
+    });
+
+    // Start the Textchest-only watch asynchronously
+    setImmediate(() => {
+      ticketmasterWatch.startTextchestWatch(app, email, event.channel, event.ts)
+        .catch(error => {
+          console.error('[TMCODE] Textchest watch failed:', error.message);
+          app.client.chat.postMessage({
+            channel: event.channel,
+            thread_ts: event.ts,
+            text: `:x: Error: ${error.message}`
+          }).catch(e => console.error('[TMCODE] Failed to post error:', e.message));
+        });
+    });
     return;
   }
 
