@@ -20,6 +20,14 @@ function formatPhone(phone) {
   return phone;
 }
 
+/**
+ * Check if sender is a short code (5-6 digits)
+ */
+function isShortCode(phone) {
+  const digits = phone.replace(/\D/g, '');
+  return digits.length >= 5 && digits.length <= 6;
+}
+
 const router = express.Router();
 
 /**
@@ -179,6 +187,14 @@ router.post('/sms', async (req, res) => {
     const isVerification = slack.isVerificationCode(content);
     if (isVerification) {
       console.log(`[VERIFICATION] Detected verification code, skipping spam filter`);
+    }
+
+    // Filter short codes as spam (unless verification code)
+    if (!isVerification && isShortCode(senderPhone)) {
+      console.log(`[SPAM BLOCKED] Short code filtered: ${senderPhone}`);
+      await slack.postSpamMessage(senderPhone, recipientPhone, content, { spam: true, category: 'Short Code', confidence: 'high' }, bank, slot);
+      sweepTest.recordMessageArrival('spam', slot);
+      return res.status(200).json({ status: 'spam_filtered', category: 'Short Code' });
     }
 
     // Check for spam using Claude (skip if verification code)
