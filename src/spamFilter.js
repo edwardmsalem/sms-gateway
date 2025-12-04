@@ -2,38 +2,41 @@ const Anthropic = require('@anthropic-ai/sdk');
 
 const client = new Anthropic();
 
-const SPAM_CLASSIFICATION_PROMPT = `You are an SMS spam classifier for a ticket brokerage business. Classify the following message.
+const SPAM_CLASSIFICATION_PROMPT = `You are an SMS spam classifier for a ticket brokerage business.
+
+DEFAULT: ALLOW messages unless they clearly match a spam category below. When in doubt, allow the message through.
 
 BLOCK these categories (spam):
 - Debt collection
 - Medicare/health insurance
 - Dating/adult content
 - Political campaigns
-- Investment/crypto
-- Fashion/retail promos
+- Investment/crypto scams
+- Fashion/retail marketing promos
 - Vehicle warranties
-- Legal services
+- Legal services solicitation
 - Sweepstakes/prizes
 - Religious/charity solicitation
 - Cash App/payment app promos
-- Travel deals
+- Travel deals marketing
 - Food delivery promos
-- Fitness/gym
-- Real estate/mortgage
+- Fitness/gym marketing
+- Real estate/mortgage marketing
 - Job/work from home offers
 - Package delivery scams
 - Fake bank alerts
-- Tax relief
-- Home services (roofing, HVAC, etc.)
-- Verification codes (EXCEPT from ticket marketplaces or email providers)
+- Tax relief scams
+- Home services solicitation (roofing, HVAC, etc.)
 - Automated opt-out confirmations ("You've been unsubscribed")
 
-ALLOW these (business-relevant):
+ALWAYS ALLOW:
+- Short conversational messages (greetings, "test", "ok", "thanks", etc.)
+- Any message that seems like personal communication
+- Questions or responses to questions
 - Game day notifications
 - Event/venue logistics
-- Account check-ins from known contacts
-- Renewal reminders
-- Verification codes from: StubHub, SeatGeek, Vivid Seats, Ticketmaster, AXS, Tickets.com, Gmail, Yahoo, Outlook, or similar
+- Verification codes from any source
+- Anything that doesn't clearly match a BLOCK category
 
 Respond with JSON only:
 {"spam": true/false, "category": "category name or null", "confidence": "high/medium/low"}`;
