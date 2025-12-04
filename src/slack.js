@@ -36,7 +36,7 @@ function cleanupSpamThreads() {
 
 /**
  * Check if message contains a verification code from known services
- * Only Microsoft, Google, or ticket websites bypass spam filter
+ * Only email providers and ticket websites bypass spam filter
  */
 function isVerificationCode(content) {
   if (!content) return false;
@@ -45,12 +45,12 @@ function isVerificationCode(content) {
   // Google verification codes: G- followed by 6 digits
   if (/g-\d{6}/i.test(content)) return true;
 
-  // Google with code/verification keywords
+  // Email providers
   if (text.includes('google') && (text.includes('code') || text.includes('verification'))) return true;
   if (text.includes('gmail')) return true;
-
-  // Microsoft
   if (text.includes('microsoft')) return true;
+  if (text.includes('yahoo')) return true;
+  if (text.includes('outlook')) return true;
 
   // Ticketing services
   if (text.includes('ticketmaster')) return true;
