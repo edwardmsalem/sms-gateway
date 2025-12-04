@@ -515,8 +515,9 @@ async function startTextchestWatch(slackApp, email, slackChannel, threadTs) {
             }
           }
         } else {
+          // Found associate but no conversation history to know slot
           await postToThread(slackApp, slackChannel, threadTs,
-            `Found ${associate.name} but no active SS number`);
+            `Found ${associate.name} · ${phoneDisplay} (no slot history - use \`@SalemAI status <bank> <slot>\` to find it)`);
         }
       } else {
         await postToThread(slackApp, slackChannel, threadTs,
