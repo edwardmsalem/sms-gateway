@@ -164,34 +164,47 @@ function buildEnrichedSmsBlocks({ content, bankId, port, enrichment, iccid }) {
   let text = '';
 
   if (deals && deals.length > 0) {
-    // Find the best matching deal (prioritize regional match)
-    const bestDeal = findBestMatchingDeal(senderAreaCode, deals);
-    const regionMatch = checkAreaCodeMatch(senderAreaCode, deals);
-    const regionInfo = regionMatch ? '(matches region)' : '(not team region)';
-    const monday = require('./monday');
     const senderState = monday.getStateFromAreaCode(senderAreaCode);
 
-    // Header: Associate name and receiver phone
-    text += `📥 *New SMS to ${bestDeal.associateName}* · ${receiverPhoneFormatted}\n`;
-
-    // From line with state and region match info
-    text += `From: ${senderPhoneFormatted} · ${senderState || 'Unknown'} ${regionInfo}\n`;
-
-    // Get closer Slack mention
-    let closerMention = '';
-    if (bestDeal.closer) {
-      const closerSlackId = monday.getCloserSlackId(bestDeal.closer);
-      closerMention = closerSlackId ? ` <@${closerSlackId}>` : ` @${bestDeal.closer}`;
+    // Filter deals to those matching sender's state
+    let stateMatchedDeals = [];
+    if (senderState) {
+      stateMatchedDeals = deals.filter(deal => {
+        if (!deal.team) return false;
+        const result = monday.doesAreaCodeMatchTeam(senderAreaCode, deal.team);
+        return result.matches;
+      });
     }
 
-    // Deal line(s) - show best matching deal prominently
-    if (deals.length === 1) {
-      text += `Deal: ${bestDeal.team} (${bestDeal.status})${closerMention}\n`;
+    // Use state-matched deals if any, otherwise show all deals
+    const dealsToShow = stateMatchedDeals.length > 0 ? stateMatchedDeals : deals;
+    const showingAllDeals = stateMatchedDeals.length === 0 && deals.length > 0;
+
+    // Get associate info from first deal
+    const firstDeal = deals[0];
+
+    // Header: Associate name and receiver phone
+    text += `📥 *New SMS to ${firstDeal.associateName}* · ${receiverPhoneFormatted}\n`;
+
+    // From line with state info
+    const stateDisplay = senderState || 'Unknown';
+    text += `From: ${senderPhoneFormatted} · ${stateDisplay}\n`;
+
+    // Get closer Slack mention from first deal
+    let closerMention = '';
+    if (firstDeal.closer) {
+      const closerSlackId = monday.getCloserSlackId(firstDeal.closer);
+      closerMention = closerSlackId ? ` <@${closerSlackId}>` : ` @${firstDeal.closer}`;
+    }
+
+    // Deal line(s) - show all matching deals
+    if (dealsToShow.length === 1) {
+      const regionNote = showingAllDeals ? ' _(no deals in state)_' : '';
+      text += `Deal: ${dealsToShow[0].team} (${dealsToShow[0].status})${closerMention}${regionNote}\n`;
     } else {
-      // Show best match first, then list others
-      const otherDeals = deals.filter(d => d !== bestDeal).map(d => `${d.team} (${d.status})`).join(', ');
-      text += `Deal: ${bestDeal.team} (${bestDeal.status})${closerMention}\n`;
-      text += `_Other deals: ${otherDeals}_\n`;
+      const regionNote = showingAllDeals ? ' _(no deals in state, showing all)_' : '';
+      const dealsList = dealsToShow.map(d => `${d.team} (${d.status})`).join(', ');
+      text += `Deals: ${dealsList}${closerMention}${regionNote}\n`;
     }
 
     text += '\n';
@@ -202,7 +215,7 @@ function buildEnrichedSmsBlocks({ content, bankId, port, enrichment, iccid }) {
     text += `📥 *New SMS to ${receiverPhoneFormatted}*\n`;
     text += `From: ${senderPhoneFormatted} · ${senderStateName || 'Unknown'}\n\n`;
     text += `"${content}"\n\n`;
-    text += `_Reply: @SalemAI ${bankId} ${port} followed by your message_`;
+    text += `_Reply: @SalemAI reply ${bankId} ${port} followed by your message_`;
   }
 
   return [{
