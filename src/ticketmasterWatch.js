@@ -346,9 +346,10 @@ async function pollGmailForTicketmaster(slackApp, watch, email) {
     try {
       // Search for Ticketmaster code emails TO or FROM this specific email address
       // Subject patterns: "Your Authentication Code" or "Your request to reset password"
+      // Use after:timestamp (Unix seconds) to only get emails since watch started
       const response = await gmailClient.users.messages.list({
         userId: 'me',
-        q: `{to:${email} from:${email}} (subject:"authentication code" OR subject:"reset password") newer_than:10m`,
+        q: `{to:${email} from:${email}} (subject:"authentication code" OR subject:"reset password") after:${startTime}`,
         maxResults: 10
       });
 
