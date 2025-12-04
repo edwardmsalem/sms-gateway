@@ -131,6 +131,30 @@ function checkAreaCodeMatch(senderAreaCode, deals) {
 }
 
 /**
+ * Find the deal that best matches the sender's region
+ * Returns the matching deal, or the first deal if no regional match
+ */
+function findBestMatchingDeal(senderAreaCode, deals) {
+  if (!deals || deals.length === 0) return null;
+  if (deals.length === 1) return deals[0];
+
+  const monday = require('./monday');
+
+  // First, try to find a deal that matches the sender's region
+  if (senderAreaCode) {
+    for (const deal of deals) {
+      if (deal.team) {
+        const result = monday.doesAreaCodeMatchTeam(senderAreaCode, deal.team);
+        if (result.matches) return deal;
+      }
+    }
+  }
+
+  // No regional match, return first deal
+  return deals[0];
+}
+
+/**
  * Build enriched SMS message blocks with Monday.com deal info
  */
 function buildEnrichedSmsBlocks({ content, bankId, port, enrichment, iccid }) {
@@ -140,37 +164,39 @@ function buildEnrichedSmsBlocks({ content, bankId, port, enrichment, iccid }) {
   let text = '';
 
   if (deals && deals.length > 0) {
-    // Format with deal info
-    const firstDeal = deals[0];
+    // Find the best matching deal (prioritize regional match)
+    const bestDeal = findBestMatchingDeal(senderAreaCode, deals);
     const regionMatch = checkAreaCodeMatch(senderAreaCode, deals);
     const regionInfo = regionMatch ? '(matches region)' : '(not team region)';
     const monday = require('./monday');
     const senderState = monday.getStateFromAreaCode(senderAreaCode);
 
     // Header: Associate name and receiver phone
-    text += `📥 *New SMS to ${firstDeal.associateName}* · ${receiverPhoneFormatted}\n`;
+    text += `📥 *New SMS to ${bestDeal.associateName}* · ${receiverPhoneFormatted}\n`;
 
     // From line with state and region match info
     text += `From: ${senderPhoneFormatted} · ${senderState || 'Unknown'} ${regionInfo}\n`;
 
     // Get closer Slack mention
     let closerMention = '';
-    if (firstDeal.closer) {
-      const closerSlackId = monday.getCloserSlackId(firstDeal.closer);
-      closerMention = closerSlackId ? ` <@${closerSlackId}>` : ` @${firstDeal.closer}`;
+    if (bestDeal.closer) {
+      const closerSlackId = monday.getCloserSlackId(bestDeal.closer);
+      closerMention = closerSlackId ? ` <@${closerSlackId}>` : ` @${bestDeal.closer}`;
     }
 
-    // Deal line(s)
+    // Deal line(s) - show best matching deal prominently
     if (deals.length === 1) {
-      text += `Deal: ${firstDeal.team} (${firstDeal.status})${closerMention}\n`;
+      text += `Deal: ${bestDeal.team} (${bestDeal.status})${closerMention}\n`;
     } else {
-      const dealSummary = deals.map(d => `${d.team} (${d.status})`).join(', ');
-      text += `Deals: ${dealSummary}${closerMention}\n`;
+      // Show best match first, then list others
+      const otherDeals = deals.filter(d => d !== bestDeal).map(d => `${d.team} (${d.status})`).join(', ');
+      text += `Deal: ${bestDeal.team} (${bestDeal.status})${closerMention}\n`;
+      text += `_Other deals: ${otherDeals}_\n`;
     }
 
     text += '\n';
     text += `"${content}"\n\n`;
-    text += `_Reply: @SalemAI ${bankId} ${port} followed by your message_`;
+    text += `_Reply: @SalemAI reply ${bankId} ${port} followed by your message_`;
   } else {
     // Format without deal info
     text += `📥 *New SMS to ${receiverPhoneFormatted}*\n`;
@@ -1004,33 +1030,33 @@ async function postMaxsipMessage(content, enrichment) {
 
   if (deals && deals.length > 0) {
     const monday = require('./monday');
-    const firstDeal = deals[0];
-    const regionMatch = monday.doesAreaCodeMatchTeam(
-      enrichment.senderAreaCode,
-      firstDeal.team
-    ).matches;
+    // Find the best matching deal (prioritize regional match)
+    const bestDeal = findBestMatchingDeal(enrichment.senderAreaCode, deals);
+    const regionMatch = checkAreaCodeMatch(enrichment.senderAreaCode, deals);
     const regionInfo = regionMatch ? '(matches region)' : '(not team region)';
     const senderState = monday.getStateFromAreaCode(enrichment.senderAreaCode);
 
     // Header: Associate name and receiver phone
-    text += `📥 *New SMS to ${firstDeal.associateName}* · ${receiverPhoneFormatted}\n`;
+    text += `📥 *New SMS to ${bestDeal.associateName}* · ${receiverPhoneFormatted}\n`;
 
     // From line with state and region match info
     text += `From: ${senderPhoneFormatted} · ${senderState || 'Unknown'} ${regionInfo}\n`;
 
     // Get closer Slack mention
     let closerMention = '';
-    if (firstDeal.closer) {
-      const closerSlackId = monday.getCloserSlackId(firstDeal.closer);
-      closerMention = closerSlackId ? ` <@${closerSlackId}>` : ` @${firstDeal.closer}`;
+    if (bestDeal.closer) {
+      const closerSlackId = monday.getCloserSlackId(bestDeal.closer);
+      closerMention = closerSlackId ? ` <@${closerSlackId}>` : ` @${bestDeal.closer}`;
     }
 
-    // Deal line(s)
+    // Deal line(s) - show best matching deal prominently
     if (deals.length === 1) {
-      text += `Deal: ${firstDeal.team} (${firstDeal.status})${closerMention}\n`;
+      text += `Deal: ${bestDeal.team} (${bestDeal.status})${closerMention}\n`;
     } else {
-      const dealSummary = deals.map(d => `${d.team} (${d.status})`).join(', ');
-      text += `Deals: ${dealSummary}${closerMention}\n`;
+      // Show best match first, then list others
+      const otherDeals = deals.filter(d => d !== bestDeal).map(d => `${d.team} (${d.status})`).join(', ');
+      text += `Deal: ${bestDeal.team} (${bestDeal.status})${closerMention}\n`;
+      text += `_Other deals: ${otherDeals}_\n`;
     }
 
     text += '\n';
