@@ -328,6 +328,8 @@ function doesAreaCodeMatchTeam(areaCode, teamName) {
 async function searchAssociateByEmail(email) {
   const normalizedEmail = email.toLowerCase().trim();
 
+  console.log(`[MONDAY] Searching for email: ${normalizedEmail}`);
+
   const query = `
     query ($boardId: [ID!]!) {
       boards(ids: $boardId) {
@@ -349,6 +351,14 @@ async function searchAssociateByEmail(email) {
   const result = await mondayQuery(query, { boardId: [ASSOCIATES_BOARD_ID] });
   const items = result.boards[0]?.items_page?.items || [];
 
+  console.log(`[MONDAY] Found ${items.length} associates`);
+
+  // Log column IDs from first item to debug
+  if (items.length > 0) {
+    const colIds = items[0].column_values.map(c => c.id);
+    console.log(`[MONDAY] Column IDs: ${colIds.join(', ')}`);
+  }
+
   for (const item of items) {
     let phone = null;
     let itemEmail = null;
@@ -357,12 +367,20 @@ async function searchAssociateByEmail(email) {
       if (col.id === 'ss_mobile' && col.text && col.text !== 'null' && col.text.length >= 10) {
         phone = col.text;
       }
-      if (col.id === 'email' && col.text && col.text !== 'null') {
+      // Check multiple possible email column IDs
+      if ((col.id === 'email' || col.id === 'email__1' || col.id === 'dup__of_email' || col.id === 'text') &&
+          col.text && col.text !== 'null' && col.text.includes('@')) {
         itemEmail = col.text;
       }
     }
 
+    // Debug: log associates that have emails
+    if (itemEmail && itemEmail.toLowerCase().includes(normalizedEmail.split('@')[0])) {
+      console.log(`[MONDAY] Potential match: ${item.name}, email=${itemEmail}, phone=${phone}`);
+    }
+
     if (itemEmail && itemEmail.toLowerCase().trim() === normalizedEmail && phone) {
+      console.log(`[MONDAY] Found match: ${item.name}, phone=${phone}`);
       return {
         name: item.name,
         phone: phone.replace(/\D/g, ''),
@@ -371,6 +389,7 @@ async function searchAssociateByEmail(email) {
     }
   }
 
+  console.log(`[MONDAY] No match found for ${normalizedEmail}`);
   return null;
 }
 
