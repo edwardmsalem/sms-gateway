@@ -486,9 +486,76 @@ async function startTextchestWatch(slackApp, email, slackChannel, threadTs) {
       return;
     }
 
-    // Not found in Textchest - still monitor Gmail
+    // Step 2: Not found in Textchest - check Monday.com for Ejoin number
     await postToThread(slackApp, slackChannel, threadTs,
-      `⚠️ No Textchest number found for ${email}. Watching Gmail only for 10 minutes...`);
+      `Not found in Textchest. Searching Monday.com...`);
+
+    const associate = await monday.searchAssociateByEmail(email);
+
+    if (associate) {
+      // Found in Monday.com - try to activate Ejoin slot
+      const phoneDisplay = formatPhoneDisplay(associate.phone);
+      await postToThread(slackApp, slackChannel, threadTs,
+        `✅ Found Monday.com: ${associate.name} · ${phoneDisplay}`);
+
+      // Find the slot for this phone number
+      const slotInfo = findSlotByPhone(associate.phone);
+
+      if (slotInfo) {
+        // Activate the slot
+        const bank = db.getSimBank(slotInfo.bankId);
+        if (bank) {
+          try {
+            await simbank.activateSlot(bank, slotInfo.slot);
+            await postToThread(slackApp, slackChannel, threadTs,
+              `📱 Ejoin activated (Bank ${slotInfo.bankId}, Slot ${slotInfo.slot}). Watching SMS + Email for 10 minutes...`);
+          } catch (err) {
+            await postToThread(slackApp, slackChannel, threadTs,
+              `⚠️ Could not activate slot: ${err.message}. Still watching...`);
+          }
+        }
+
+        // Create watch for Ejoin webhook
+        const normalized = normalizePhone(associate.phone);
+        const watch = {
+          endTime: Date.now() + WATCH_DURATION_MS,
+          threadTs,
+          slackChannel,
+          source: 'ejoin',
+          email,
+          associateName: associate.name,
+          postedEmails: new Set()
+        };
+        activeWatches.set(normalized, watch);
+
+        // Start Gmail polling
+        pollGmailForTicketmaster(slackApp, watch, email);
+
+        // Set cleanup timer
+        setTimeout(() => {
+          const w = activeWatches.get(normalized);
+          if (w && Date.now() >= w.endTime) {
+            if (w.gmailPollInterval) clearInterval(w.gmailPollInterval);
+            activeWatches.delete(normalized);
+            postToThread(slackApp, slackChannel, threadTs,
+              "⏱️ Watch complete. No more monitoring.").catch(console.error);
+          }
+        }, WATCH_DURATION_MS);
+
+        console.log(`[TM WATCH] Started Ejoin+Gmail watch for ${phoneDisplay}`);
+        return;
+      } else {
+        await postToThread(slackApp, slackChannel, threadTs,
+          `⚠️ No Ejoin slot found for ${phoneDisplay}. Watching Gmail only...`);
+      }
+    } else {
+      await postToThread(slackApp, slackChannel, threadTs,
+        `⚠️ No number found in Monday.com for ${email}.`);
+    }
+
+    // Fallback: Gmail only
+    await postToThread(slackApp, slackChannel, threadTs,
+      `👁️ Watching Gmail only for Ticketmaster codes for 10 minutes...`);
 
     // Create watch without phone
     const watch = {
