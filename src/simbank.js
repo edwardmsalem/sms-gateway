@@ -460,5 +460,6 @@ module.exports = {
   countActiveSims,
   formatStatusForSlack,
   updateLastKnownSlot,
+  activateSlot,
   PORT_STATUS
 };

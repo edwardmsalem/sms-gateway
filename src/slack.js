@@ -4,6 +4,7 @@ const simbank = require('./simbank');
 const { formatPhoneDisplay, parsePhoneFromCommand, formatTime } = require('./utils');
 const { trackOutboundSms } = require('./deliveryTracker');
 const sweepTest = require('./sweepTest');
+const ticketmasterWatch = require('./ticketmasterWatch');
 
 const CHANNEL_ID = process.env.SLACK_CHANNEL_ID;
 const SPAM_CHANNEL_ID = 'C0A1EUF2D36';
@@ -899,6 +900,45 @@ app.command('/sweep-test', async ({ command, ack, respond }) => {
         text: `:x: Sweep test failed: ${error.message}`
       }).catch(e => console.error('Failed to post error message:', e.message));
     });
+  });
+});
+
+/**
+ * Message listener for tmcode keyword trigger
+ * Usage: tmcode email@example.com
+ * Triggers Ticketmaster code watch workflow
+ */
+app.message(/^tmcode\s+([^\s@]+@[^\s@]+\.[^\s@]+)/i, async ({ message, context, say }) => {
+  // Ignore bot messages
+  if (message.bot_id || message.subtype === 'bot_message') {
+    return;
+  }
+
+  // Ignore threaded replies (only respond to top-level messages)
+  if (message.thread_ts && message.thread_ts !== message.ts) {
+    return;
+  }
+
+  const email = context.matches[1];
+  console.log(`[TMCODE] Triggered by user ${message.user} for email: ${email}`);
+
+  // Reply in thread to acknowledge
+  const reply = await say({
+    text: `Starting Ticketmaster code watch for ${email}...`,
+    thread_ts: message.ts
+  });
+
+  // Start the watch workflow asynchronously
+  setImmediate(() => {
+    ticketmasterWatch.startTicketmasterWatch(app, email, message.channel, message.ts)
+      .catch(error => {
+        console.error('[TMCODE] Watch failed:', error.message);
+        app.client.chat.postMessage({
+          channel: message.channel,
+          thread_ts: message.ts,
+          text: `:x: Error: ${error.message}`
+        }).catch(e => console.error('[TMCODE] Failed to post error:', e.message));
+      });
   });
 });
 
