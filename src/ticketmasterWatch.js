@@ -119,10 +119,26 @@ function isTicketmasterMessage(content) {
 }
 
 /**
+ * Format message age as human-readable string
+ */
+function formatMessageAge(timestampMs) {
+  const ageMs = Date.now() - timestampMs;
+  const ageMinutes = Math.floor(ageMs / 60000);
+  const ageHours = Math.floor(ageMinutes / 60);
+
+  if (ageMinutes < 1) return 'just now';
+  if (ageMinutes < 60) return `${ageMinutes} minute${ageMinutes === 1 ? '' : 's'} ago`;
+  if (ageHours < 24) return `${ageHours} hour${ageHours === 1 ? '' : 's'} ago`;
+  const ageDays = Math.floor(ageHours / 24);
+  return `${ageDays} day${ageDays === 1 ? '' : 's'} ago`;
+}
+
+/**
  * Start Textchest polling for a watch
  */
 async function startTextchestPolling(slackApp, watch, number) {
-  const startTs = Math.floor(Date.now() / 1000);
+  // Only show messages from last 1 hour (in milliseconds)
+  const ONE_HOUR_MS = 60 * 60 * 1000;
 
   const pollInterval = setInterval(async () => {
     // Check if watch is still active
@@ -135,27 +151,40 @@ async function startTextchestPolling(slackApp, watch, number) {
     }
 
     try {
-      // Get messages since watch started
-      const messages = await textchest.getMessages(number, 100, startTs);
+      // Get recent messages (ts=0 gets all, we filter by age)
+      const messages = await textchest.getMessages(number, 100, 0);
 
       console.log(`[TM WATCH] Textchest poll: ${messages.length} messages for ${number}`);
 
-      // Filter for Ticketmaster messages
-      for (const msg of messages) {
-        // Textchest API returns "msg" field for message content
+      // Filter for Ticketmaster messages from last 1 hour
+      const now = Date.now();
+      const recentTmMessages = messages
+        .filter(msg => {
+          const content = msg.msg || msg.body || msg.message || msg.content || '';
+          if (!isTicketmasterMessage(content)) return false;
+
+          // Textchest ts is in milliseconds
+          const msgTime = msg.ts || 0;
+          const ageMs = now - msgTime;
+          return ageMs <= ONE_HOUR_MS;
+        })
+        .sort((a, b) => (b.ts || 0) - (a.ts || 0)); // Sort newest first
+
+      for (const msg of recentTmMessages) {
         const content = msg.msg || msg.body || msg.message || msg.content || '';
-        console.log(`[TM WATCH] Message from ${msg.from}: "${content.substring(0, 50)}..."`);
+        const msgTime = msg.ts || 0;
+        const ageText = formatMessageAge(msgTime);
 
-        if (isTicketmasterMessage(content)) {
-          // Check if we've already posted this message
-          if (!watch.postedMessages) watch.postedMessages = new Set();
-          const msgKey = `${msg.id || msg.ts || content.substring(0, 50)}`;
+        console.log(`[TM WATCH] TM message from ${msg.from}: "${content.substring(0, 50)}..." (${ageText})`);
 
-          if (!watch.postedMessages.has(msgKey)) {
-            watch.postedMessages.add(msgKey);
-            await postToThread(slackApp, watch.slackChannel, watch.threadTs,
-              `🎫 Ticketmaster code received:\n"${content}"`);
-          }
+        // Check if we've already posted this message
+        if (!watch.postedMessages) watch.postedMessages = new Set();
+        const msgKey = `${msg.ts || content.substring(0, 50)}`;
+
+        if (!watch.postedMessages.has(msgKey)) {
+          watch.postedMessages.add(msgKey);
+          await postToThread(slackApp, watch.slackChannel, watch.threadTs,
+            `🎫 Ticketmaster code received _(${ageText})_:\n"${content}"`);
         }
       }
     } catch (err) {
