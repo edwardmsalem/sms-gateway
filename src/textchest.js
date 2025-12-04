@@ -20,10 +20,10 @@ function getAuthHeader() {
 
 /**
  * Get all numbers from Textchest
- * @param {number} limit - Max numbers to return (default 2000 to cover large inventories)
+ * @param {number} limit - Max numbers to return (default 5000 to cover large inventories)
  * @returns {Promise<Array<{number: string, tags: string[], email: string, module_uuid: string, slot: string}>>}
  */
-async function getNumbers(limit = 2000) {
+async function getNumbers(limit = 5000) {
   const params = new URLSearchParams({
     async_inbox: 'true',
     limit: limit.toString()
