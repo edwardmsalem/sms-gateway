@@ -344,8 +344,8 @@ async function postSpamMessage(senderPhone, recipientPhone, content, spamResult,
     });
 
     // Update parent message with new count
-    const messagePreview = defangUrls(content.length > 300 ? content.substring(0, 300) + '...' : content);
-    let parentText = `🚫 *${messagePreview}*\n\n`;
+    const messagePreview = content.length > 300 ? content.substring(0, 300) + '...' : content;
+    let parentText = `🚫 *${messagePreview}* \n\n`;
     parentText += `_${existingThread.count} recipients · ${senderDisplay} · ${senderState || 'Unknown'}`;
     if (bankId === 'maxsip') {
       parentText += ` · Maxsip`;
@@ -365,9 +365,9 @@ async function postSpamMessage(senderPhone, recipientPhone, content, spamResult,
     console.log(`[SPAM THREAD] Added to thread ${existingThread.thread_ts}, count: ${existingThread.count}`);
   } else {
     // Create new parent message - message text is the hero
-    const messagePreview = defangUrls(content.length > 300 ? content.substring(0, 300) + '...' : content);
+    const messagePreview = content.length > 300 ? content.substring(0, 300) + '...' : content;
 
-    let text = `🚫 *${messagePreview}*\n\n`;
+    let text = `🚫 *${messagePreview}* \n\n`;
     text += `_${senderDisplay} → ${recipientDisplay} · ${senderState || 'Unknown'}`;
     if (bankId === 'maxsip') {
       text += ` · Maxsip`;
