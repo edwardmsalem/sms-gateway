@@ -7,7 +7,7 @@ const { normalizePhone } = require('./utils');
 
 // Gmail API setup
 let gmail = null;
-let lastHistoryId = null;
+let startupTimestamp = null; // Only process emails after this time
 
 /**
  * Initialize Gmail API client
@@ -28,7 +28,10 @@ async function initGmail() {
   });
 
   gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-  console.log('[MAXSIP] Gmail API initialized');
+
+  // Record startup time - only process emails received after this
+  startupTimestamp = Math.floor(Date.now() / 1000);
+  console.log(`[MAXSIP] Gmail API initialized, will only process emails after ${new Date(startupTimestamp * 1000).toISOString()}`);
   return true;
 }
 
@@ -268,15 +271,15 @@ async function processMaxsipEmail(message) {
  * Poll Gmail for new Maxsip emails
  */
 async function pollGmail() {
-  if (!gmail) {
+  if (!gmail || !startupTimestamp) {
     return;
   }
 
   try {
-    // Search for unread emails from Maxsip
+    // Search for unread emails from Maxsip received AFTER app startup
     const response = await gmail.users.messages.list({
       userId: 'me',
-      q: 'from:@maxsipsms.com is:unread',
+      q: `from:@maxsipsms.com is:unread after:${startupTimestamp}`,
       maxResults: 20
     });
 
