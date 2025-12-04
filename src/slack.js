@@ -518,7 +518,8 @@ app.event('app_mention', async ({ event, say }) => {
   }
 
   // Check if this is an email (Ticketmaster code watch)
-  const emailMatch = parts[0]?.match(/^([^\s@]+@[^\s@]+\.[^\s@]+)$/i);
+  // Slack auto-links emails as <mailto:user@example.com|user@example.com>
+  const emailMatch = fullText.match(/<mailto:([^|]+)\|[^>]+>/) || parts[0]?.match(/^([^\s@]+@[^\s@]+\.[^\s@]+)$/i);
   if (emailMatch) {
     const email = emailMatch[1];
     await say({
