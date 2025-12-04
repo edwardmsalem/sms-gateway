@@ -474,11 +474,11 @@ function formatSlotStatusForSlack(status) {
 }
 
 /**
- * App mention handler for thread replies and status checks
- * Usage: @SalemAI [port] [message] - Send SMS
- * Usage: @SalemAI status [bank] [slot] - Check slot status
- * Example: @SalemAI 4.07 Hello there
- * Example: @SalemAI status 50004 4.07
+ * @SalemAI mention handler
+ * Commands:
+ * - @SalemAI tm <email> - Watch for Ticketmaster codes (SMS + Email)
+ * - @SalemAI reply <bank> <slot> <message> - Send SMS reply (in thread)
+ * - @SalemAI status <bank> <slot> - Check SIM slot status
  */
 app.event('app_mention', async ({ event, say }) => {
   await addReaction(event.channel, event.ts, 'eyes');
@@ -517,16 +517,27 @@ app.event('app_mention', async ({ event, say }) => {
     return;
   }
 
-  // Check if this is an email (Ticketmaster code watch)
-  const emailMatch = parts[0]?.match(/^([^\s@]+@[^\s@]+\.[^\s@]+)$/i);
-  if (emailMatch) {
+  // Check if this is a Ticketmaster code watch: @SalemAI tm <email>
+  if (parts[0]?.toLowerCase() === 'tm') {
+    // Extract email - Slack auto-links as <mailto:user@example.com|user@example.com>
+    const restOfText = fullText.replace(/^tm\s+/i, '');
+    const emailMatch = restOfText.match(/<mailto:([^|]+)\|[^>]+>/) || restOfText.match(/^([^\s@]+@[^\s@]+\.[^\s@]+)$/i);
+
+    if (!emailMatch) {
+      await say({
+        text: 'Usage: `@SalemAI tm <email>`\nExample: `@SalemAI tm user@example.com`',
+        thread_ts: event.thread_ts || event.ts
+      });
+      return;
+    }
+
     const email = emailMatch[1];
     await say({
-      text: `🎫 Starting Ticketmaster code watch for ${email}...`,
+      text: `🎫 Starting Ticketmaster code watch for ${email}...\n_Searching Textchest + Gmail for 10 minutes_`,
       thread_ts: event.ts
     });
 
-    // Start the Textchest-only watch asynchronously
+    // Start the Textchest+Gmail watch asynchronously
     setImmediate(() => {
       ticketmasterWatch.startTextchestWatch(app, email, event.channel, event.ts)
         .catch(error => {
@@ -541,145 +552,155 @@ app.event('app_mention', async ({ event, say }) => {
     return;
   }
 
-  // Check if user is authorized to send SMS
-  if (!APPROVED_SMS_USERS.includes(event.user)) {
-    await say({
-      text: ':no_entry: You are not authorized to send SMS via this bot.',
-      thread_ts: event.thread_ts || event.ts
-    });
-    return;
-  }
-
-  // Must be in a thread for SMS sending
-  if (!event.thread_ts) {
-    await say({
-      text: 'Please use @SalemAI in a conversation thread.\nUsage: `@SalemAI <bank> <slot> <your message>`\nExample: `@SalemAI 50004 4.07 Hello there`',
-      thread_ts: event.ts
-    });
-    return;
-  }
-
-  // Parse: @SalemAI [bank] [slot] [message]
-  const specifiedBank = parts[0];
-  const specifiedSlot = parts[1];
-  const message = parts.slice(2).join(' ');
-
-  // Validate bank format (e.g., "50004")
-  if (!specifiedBank || !/^\d{5}$/.test(specifiedBank)) {
-    await say({
-      text: `Invalid format. Bank ID is required (5 digits).\nUsage: \`@SalemAI <bank> <slot> <your message>\`\nExample: \`@SalemAI 50004 4.07 Hello there\``,
-      thread_ts: event.thread_ts
-    });
-    return;
-  }
-
-  // Validate slot format (e.g., "4.07", "1.01")
-  if (!specifiedSlot || !/^\d+\.\d+$/.test(specifiedSlot)) {
-    await say({
-      text: `Invalid format. Slot is required.\nUsage: \`@SalemAI <bank> <slot> <your message>\`\nExample: \`@SalemAI ${specifiedBank} 4.07 Hello there\``,
-      thread_ts: event.thread_ts
-    });
-    return;
-  }
-
-  if (!message) {
-    await say({
-      text: `Message is required.\nUsage: \`@SalemAI ${specifiedBank} ${specifiedSlot} <your message>\``,
-      thread_ts: event.thread_ts
-    });
-    return;
-  }
-
-  // Look up conversation by thread_ts
-  let conversation = db.findConversationByThreadTs(event.thread_ts);
-
-  // Fallback: try to find by extracting phone from parent message
-  if (!conversation) {
-    conversation = await findConversationFromParent(event.channel, event.thread_ts);
-  }
-
-  if (!conversation) {
-    await say({
-      text: 'Could not find conversation for this thread. Please check the thread.',
-      thread_ts: event.thread_ts
-    });
-    return;
-  }
-
-  // Check if specified bank matches conversation's bank
-  const conversationBank = conversation.sim_bank_id;
-  if (specifiedBank !== conversationBank) {
-    await say({
-      text: `:warning: *Warning:* Sending from bank ${specifiedBank}, but conversation originated from bank ${conversationBank}`,
-      thread_ts: event.thread_ts
-    });
-  }
-
-  const bankId = specifiedBank;
-  const toPhone = conversation.sender_phone;
-
-  try {
-    let progressTs = null;
-
-    // Progress callback for slot activation status
-    const onProgress = async (step, msg) => {
-      const stepEmoji = {
-        checking: ':mag:',
-        ready: ':white_check_mark:',
-        switching: ':arrows_counterclockwise:',
-        waiting: ':hourglass_flowing_sand:',
-        sending: ':outbox_tray:'
-      };
-      const text = `${stepEmoji[step] || ':gear:'} ${msg}`;
-
-      try {
-        progressTs = await updateProgressMessage(event.channel, event.thread_ts, progressTs, text);
-      } catch (err) {
-        // Progress update failed, continue anyway
-      }
-    };
-
-    // Send SMS
-    await simbank.sendSms(bankId, specifiedSlot, toPhone, message, onProgress);
-
-    // Update progress message to completion
-    if (progressTs) {
-      try {
-        await app.client.chat.update({
-          channel: event.channel,
-          ts: progressTs,
-          text: `:outbox_tray: SMS sent from bank ${bankId} slot ${specifiedSlot}`
-        });
-      } catch (err) {
-        // Ignore update failures
-      }
+  // Check if this is an SMS reply: @SalemAI reply <bank> <slot> <message>
+  if (parts[0]?.toLowerCase() === 'reply') {
+    // Check if user is authorized to send SMS
+    if (!APPROVED_SMS_USERS.includes(event.user)) {
+      await say({
+        text: ':no_entry: You are not authorized to send SMS via this bot.',
+        thread_ts: event.thread_ts || event.ts
+      });
+      return;
     }
 
-    // Record the message
-    db.insertMessage({
-      conversation_id: conversation.id,
-      direction: 'outbound',
-      content: message,
-      sent_by_slack_user: event.user,
-      status: 'sent'
-    });
+    // Must be in a thread for SMS sending
+    if (!event.thread_ts) {
+      await say({
+        text: 'Please use `@SalemAI reply` in a conversation thread.\nUsage: `@SalemAI reply <bank> <slot> <message>`\nExample: `@SalemAI reply 50004 4.07 Hello there`',
+        thread_ts: event.ts
+      });
+      return;
+    }
 
-    db.updateConversationTimestamp(conversation.id);
-    await addReaction(event.channel, event.ts, 'outbox_tray');
-    trackOutboundSms(toPhone, event.channel, event.ts);
+    // Parse: @SalemAI reply [bank] [slot] [message]
+    const specifiedBank = parts[1];
+    const specifiedSlot = parts[2];
+    const message = parts.slice(3).join(' ');
 
-    // Post confirmation with specified slot
-    const displayConversation = { ...conversation, sim_bank_id: bankId, sim_port: specifiedSlot };
-    await postOutboundToThread(event.thread_ts, message, event.user, displayConversation);
+    // Validate bank format (e.g., "50004")
+    if (!specifiedBank || !/^\d{5}$/.test(specifiedBank)) {
+      await say({
+        text: `Invalid format. Bank ID is required (5 digits).\nUsage: \`@SalemAI reply <bank> <slot> <message>\`\nExample: \`@SalemAI reply 50004 4.07 Hello there\``,
+        thread_ts: event.thread_ts
+      });
+      return;
+    }
 
-  } catch (error) {
-    console.error('Failed to send SMS:', error.message);
-    await addReaction(event.channel, event.ts, 'x');
-    await say({
-      text: `Failed to send: ${error.message}`,
-      thread_ts: event.thread_ts
-    });
+    // Validate slot format (e.g., "4.07", "1.01")
+    if (!specifiedSlot || !/^\d+\.\d+$/.test(specifiedSlot)) {
+      await say({
+        text: `Invalid format. Slot is required.\nUsage: \`@SalemAI reply <bank> <slot> <message>\`\nExample: \`@SalemAI reply ${specifiedBank} 4.07 Hello there\``,
+        thread_ts: event.thread_ts
+      });
+      return;
+    }
+
+    if (!message) {
+      await say({
+        text: `Message is required.\nUsage: \`@SalemAI reply ${specifiedBank} ${specifiedSlot} <message>\``,
+        thread_ts: event.thread_ts
+      });
+      return;
+    }
+
+    // Look up conversation by thread_ts
+    let conversation = db.findConversationByThreadTs(event.thread_ts);
+
+    // Fallback: try to find by extracting phone from parent message
+    if (!conversation) {
+      conversation = await findConversationFromParent(event.channel, event.thread_ts);
+    }
+
+    if (!conversation) {
+      await say({
+        text: 'Could not find conversation for this thread. Please check the thread.',
+        thread_ts: event.thread_ts
+      });
+      return;
+    }
+
+    // Check if specified bank matches conversation's bank
+    const conversationBank = conversation.sim_bank_id;
+    if (specifiedBank !== conversationBank) {
+      await say({
+        text: `:warning: *Warning:* Sending from bank ${specifiedBank}, but conversation originated from bank ${conversationBank}`,
+        thread_ts: event.thread_ts
+      });
+    }
+
+    const bankId = specifiedBank;
+    const toPhone = conversation.sender_phone;
+
+    try {
+      let progressTs = null;
+
+      // Progress callback for slot activation status
+      const onProgress = async (step, msg) => {
+        const stepEmoji = {
+          checking: ':mag:',
+          ready: ':white_check_mark:',
+          switching: ':arrows_counterclockwise:',
+          waiting: ':hourglass_flowing_sand:',
+          sending: ':outbox_tray:'
+        };
+        const text = `${stepEmoji[step] || ':gear:'} ${msg}`;
+
+        try {
+          progressTs = await updateProgressMessage(event.channel, event.thread_ts, progressTs, text);
+        } catch (err) {
+          // Progress update failed, continue anyway
+        }
+      };
+
+      // Send SMS
+      await simbank.sendSms(bankId, specifiedSlot, toPhone, message, onProgress);
+
+      // Update progress message to completion
+      if (progressTs) {
+        try {
+          await app.client.chat.update({
+            channel: event.channel,
+            ts: progressTs,
+            text: `:outbox_tray: SMS sent from bank ${bankId} slot ${specifiedSlot}`
+          });
+        } catch (err) {
+          // Ignore update failures
+        }
+      }
+
+      // Record the message
+      db.insertMessage({
+        conversation_id: conversation.id,
+        direction: 'outbound',
+        content: message,
+        sent_by_slack_user: event.user,
+        status: 'sent'
+      });
+
+      db.updateConversationTimestamp(conversation.id);
+      await addReaction(event.channel, event.ts, 'outbox_tray');
+      trackOutboundSms(toPhone, event.channel, event.ts);
+
+      // Post confirmation with specified slot
+      const displayConversation = { ...conversation, sim_bank_id: bankId, sim_port: specifiedSlot };
+      await postOutboundToThread(event.thread_ts, message, event.user, displayConversation);
+
+    } catch (error) {
+      console.error('Failed to send SMS:', error.message);
+      await addReaction(event.channel, event.ts, 'x');
+      await say({
+        text: `Failed to send: ${error.message}`,
+        thread_ts: event.thread_ts
+      });
+    }
+    return;
   }
+
+  // Default: show help message for unrecognized commands
+  await say({
+    text: `*@SalemAI Commands:*\n• \`@SalemAI tm <email>\` - Watch for Ticketmaster codes\n• \`@SalemAI reply <bank> <slot> <message>\` - Send SMS reply (in thread)\n• \`@SalemAI status <bank> <slot>\` - Check SIM slot status`,
+    thread_ts: event.thread_ts || event.ts
+  });
 });
 
 /**
