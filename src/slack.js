@@ -271,9 +271,6 @@ async function postInboundToThread(threadTs, senderPhone, recipientPhone, conten
   const bankId = conversation?.sim_bank_id || 'unknown';
   const port = conversation?.sim_port || 'PORT';
 
-  // Route verification codes to dedicated channel
-  const targetChannel = isVerificationCode(content) ? VERIFICATION_CHANNEL_ID : CHANNEL_ID;
-
   // Use enriched blocks if enrichment data is provided
   const blocks = enrichment
     ? buildEnrichedSmsBlocks({
@@ -294,13 +291,27 @@ async function postInboundToThread(threadTs, senderPhone, recipientPhone, conten
         iccid: conversation?.iccid
       });
 
+  // Always post to the existing conversation thread in regular channel
   const result = await app.client.chat.postMessage({
-    channel: targetChannel,
+    channel: CHANNEL_ID,
     thread_ts: threadTs,
     reply_broadcast: true,
     text: `New message from ${formatPhoneDisplay(senderPhone)}`,
     blocks
   });
+
+  // If it's a verification code, ALSO post to the verification channel
+  if (isVerificationCode(content)) {
+    try {
+      await app.client.chat.postMessage({
+        channel: VERIFICATION_CHANNEL_ID,
+        text: `New message from ${formatPhoneDisplay(senderPhone)}`,
+        blocks
+      });
+    } catch (err) {
+      console.error('[SLACK] Failed to post to verification channel:', err.message);
+    }
+  }
 
   // If thread didn't exist, result.ts becomes the new thread
   const actualThreadTs = result.message?.thread_ts || result.ts;
