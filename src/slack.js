@@ -36,8 +36,7 @@ function cleanupSpamThreads() {
 
 /**
  * Check if message contains a verification code from known services
- * Returns true if message should be routed to verification channel
- * Check this BEFORE spam filter - these messages skip spam filtering
+ * Only email providers and ticket websites bypass spam filter
  */
 function isVerificationCode(content) {
   if (!content) return false;
@@ -46,8 +45,12 @@ function isVerificationCode(content) {
   // Google verification codes: G- followed by 6 digits
   if (/g-\d{6}/i.test(content)) return true;
 
-  // Google with code/verification keywords
+  // Email providers
   if (text.includes('google') && (text.includes('code') || text.includes('verification'))) return true;
+  if (text.includes('gmail')) return true;
+  if (text.includes('microsoft')) return true;
+  if (text.includes('yahoo')) return true;
+  if (text.includes('outlook')) return true;
 
   // Ticketing services
   if (text.includes('ticketmaster')) return true;
@@ -55,12 +58,6 @@ function isVerificationCode(content) {
   if (text.includes('seatgeek')) return true;
   if (text.includes('vivid seats')) return true;
   if (text.includes('axs')) return true;
-
-  // Email providers
-  if (text.includes('gmail')) return true;
-  if (text.includes('microsoft')) return true;
-  if (text.includes('yahoo')) return true;
-  if (text.includes('outlook')) return true;
 
   return false;
 }
