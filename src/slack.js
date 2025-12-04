@@ -1047,6 +1047,57 @@ app.message(/^tmcode\s+([^\s@]+@[^\s@]+\.[^\s@]+)/i, async ({ message, context, 
 });
 
 /**
+ * Message listener for "tm" command (without @SalemAI mention)
+ * Usage: tm email@example.com
+ * Triggers Ticketmaster code watch workflow
+ */
+app.message(/^tm\s+/i, async ({ message, say }) => {
+  // Ignore bot messages
+  if (message.bot_id || message.subtype === 'bot_message') {
+    return;
+  }
+
+  // Ignore threaded replies (only respond to top-level messages)
+  if (message.thread_ts && message.thread_ts !== message.ts) {
+    return;
+  }
+
+  // Extract email - handle both raw email and Slack mailto link format
+  const text = message.text.replace(/^tm\s+/i, '').trim();
+  const emailMatch = text.match(/<mailto:([^|]+)\|[^>]+>/) || text.match(/^([^\s@]+@[^\s@]+\.[^\s@]+)$/i);
+
+  if (!emailMatch) {
+    await say({
+      text: 'Usage: `tm <email>`\nExample: `tm user@example.com`',
+      thread_ts: message.ts
+    });
+    return;
+  }
+
+  const email = emailMatch[1];
+  console.log(`[TM] Triggered by user ${message.user} for email: ${email}`);
+
+  // Reply in thread to acknowledge
+  await say({
+    text: `🎫 Starting Ticketmaster code watch for ${email}...\n_Searching Textchest + Gmail for 10 minutes_`,
+    thread_ts: message.ts
+  });
+
+  // Start the Textchest+Gmail watch asynchronously
+  setImmediate(() => {
+    ticketmasterWatch.startTextchestWatch(app, email, message.channel, message.ts)
+      .catch(error => {
+        console.error('[TM] Textchest watch failed:', error.message);
+        app.client.chat.postMessage({
+          channel: message.channel,
+          thread_ts: message.ts,
+          text: `:x: Error: ${error.message}`
+        }).catch(e => console.error('[TM] Failed to post error:', e.message));
+      });
+  });
+});
+
+/**
  * Post a Maxsip SMS message to Slack
  */
 async function postMaxsipMessage(content, enrichment) {
