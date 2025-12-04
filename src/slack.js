@@ -36,6 +36,17 @@ function cleanupSpamThreads() {
 }
 
 /**
+ * Defang URLs to prevent Slack from making them clickable
+ * Replaces . with [.] in URLs
+ */
+function defangUrls(text) {
+  // Match URLs (http, https, or www)
+  return text.replace(/https?:\/\/[^\s]+|www\.[^\s]+/gi, (url) => {
+    return url.replace(/\./g, '[.]');
+  });
+}
+
+/**
  * Check if message contains a verification code from known services
  * Only email providers and ticket websites bypass spam filter
  */
@@ -333,7 +344,7 @@ async function postSpamMessage(senderPhone, recipientPhone, content, spamResult,
     });
 
     // Update parent message with new count
-    const messagePreview = content.length > 300 ? content.substring(0, 300) + '...' : content;
+    const messagePreview = defangUrls(content.length > 300 ? content.substring(0, 300) + '...' : content);
     let parentText = `🚫 *${messagePreview}*\n\n`;
     parentText += `_${existingThread.count} recipients · ${senderDisplay} · ${senderState || 'Unknown'}`;
     if (bankId === 'maxsip') {
@@ -354,7 +365,7 @@ async function postSpamMessage(senderPhone, recipientPhone, content, spamResult,
     console.log(`[SPAM THREAD] Added to thread ${existingThread.thread_ts}, count: ${existingThread.count}`);
   } else {
     // Create new parent message - message text is the hero
-    const messagePreview = content.length > 300 ? content.substring(0, 300) + '...' : content;
+    const messagePreview = defangUrls(content.length > 300 ? content.substring(0, 300) + '...' : content);
 
     let text = `🚫 *${messagePreview}*\n\n`;
     text += `_${senderDisplay} → ${recipientDisplay} · ${senderState || 'Unknown'}`;
