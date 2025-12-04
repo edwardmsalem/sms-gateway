@@ -383,7 +383,9 @@ async function postSpamMessage(senderPhone, recipientPhone, content, spamResult,
     });
 
     // Update parent message with new count
-    const messagePreview = (content.length > 300 ? content.substring(0, 300) + '...' : content).replace(/\n+/g, ' ');
+    const messagePreview = (content.length > 300 ? content.substring(0, 300) + '...' : content)
+      .replace(/\n+/g, ' ')
+      .replace(/\*/g, '✱');
     let parentText = `🚫 *${messagePreview}*\n\n`;
     parentText += `_${existingThread.count} recipients · ${senderDisplay} · ${senderState || 'Unknown'}`;
     if (bankId === 'maxsip') {
@@ -404,8 +406,10 @@ async function postSpamMessage(senderPhone, recipientPhone, content, spamResult,
     console.log(`[SPAM THREAD] Added to thread ${existingThread.thread_ts}, count: ${existingThread.count}`);
   } else {
     // Create new parent message - message text is the hero
-    // Replace newlines with spaces to prevent markdown breaking
-    const messagePreview = (content.length > 300 ? content.substring(0, 300) + '...' : content).replace(/\n+/g, ' ');
+    // Replace newlines with spaces and escape asterisks to prevent markdown breaking
+    const messagePreview = (content.length > 300 ? content.substring(0, 300) + '...' : content)
+      .replace(/\n+/g, ' ')
+      .replace(/\*/g, '✱');
 
     let text = `🚫 *${messagePreview}*\n\n`;
     text += `_${senderDisplay} → ${recipientDisplay} · ${senderState || 'Unknown'}`;
