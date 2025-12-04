@@ -381,9 +381,27 @@ async function pollGmailForTicketmaster(slackApp, watch, email) {
           }
         }
 
-        // Extract verification code if present (6-digit code pattern)
-        const codeMatch = body.match(/\b(\d{6})\b/);
-        const code = codeMatch ? codeMatch[1] : null;
+        // Extract Ticketmaster authentication code
+        // Look for patterns like "Authentication Code:\n594137" or "code is 594137"
+        let code = null;
+        const patterns = [
+          /authentication\s*code[:\s]*(\d{6})/i,
+          /your\s*code[:\s]*(\d{6})/i,
+          /verification\s*code[:\s]*(\d{6})/i,
+          /code\s*is[:\s]*(\d{6})/i,
+        ];
+        for (const pattern of patterns) {
+          const match = body.match(pattern);
+          if (match) {
+            code = match[1];
+            break;
+          }
+        }
+        // Fallback: look for any 6-digit number after "code" keyword
+        if (!code) {
+          const fallbackMatch = body.match(/code[\s\S]{0,50}?(\d{6})/i);
+          code = fallbackMatch ? fallbackMatch[1] : null;
+        }
 
         watch.postedEmails.add(msg.id);
 
