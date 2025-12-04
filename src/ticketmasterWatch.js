@@ -376,13 +376,15 @@ async function pollGmailForTicketmaster(slackApp, watch, email) {
     }
 
     try {
-      // Search for Ticketmaster code emails TO or FROM this specific email address
-      // Subject patterns: "Your Authentication Code" or "Your request to reset password"
+      // Search for Ticketmaster code emails:
+      // - TO or FROM this email address (direct emails)
+      // - OR containing this email address anywhere (forwarded emails)
+      // Subject patterns: "authentication code", "reset password", or forwarded versions "FW:"
       // Only get emails from last 1 hour - older codes are irrelevant
       const response = await gmailClient.users.messages.list({
         userId: 'me',
-        q: `{to:${email} from:${email}} (subject:"authentication code" OR subject:"reset password") newer_than:1h`,
-        maxResults: 5
+        q: `("${email}" OR to:${email} OR from:${email}) (subject:"authentication code" OR subject:"reset password") newer_than:1h`,
+        maxResults: 10
       });
 
       const messages = response.data.messages || [];
