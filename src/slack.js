@@ -1008,11 +1008,11 @@ app.command('/sweep-test', async ({ command, ack, respond }) => {
 });
 
 /**
- * Message listener for tmcode keyword trigger
- * Usage: tmcode email@example.com
+ * Message listener for "tm" command (without @SalemAI mention)
+ * Usage: tm email@example.com
  * Triggers Ticketmaster code watch workflow
  */
-app.message(/^tmcode\s+([^\s@]+@[^\s@]+\.[^\s@]+)/i, async ({ message, context, say }) => {
+app.message(/^tm\s+/i, async ({ message, say }) => {
   // Ignore bot messages
   if (message.bot_id || message.subtype === 'bot_message') {
     return;
@@ -1023,25 +1023,37 @@ app.message(/^tmcode\s+([^\s@]+@[^\s@]+\.[^\s@]+)/i, async ({ message, context, 
     return;
   }
 
-  const email = context.matches[1];
-  console.log(`[TMCODE] Triggered by user ${message.user} for email: ${email}`);
+  // Extract email - handle both raw email and Slack mailto link format
+  const text = message.text.replace(/^tm\s+/i, '').trim();
+  const emailMatch = text.match(/<mailto:([^|]+)\|[^>]+>/) || text.match(/^([^\s@]+@[^\s@]+\.[^\s@]+)$/i);
+
+  if (!emailMatch) {
+    await say({
+      text: 'Usage: `tm <email>`\nExample: `tm user@example.com`',
+      thread_ts: message.ts
+    });
+    return;
+  }
+
+  const email = emailMatch[1];
+  console.log(`[TM] Triggered by user ${message.user} for email: ${email}`);
 
   // Reply in thread to acknowledge
-  const reply = await say({
-    text: `Starting Ticketmaster code watch for ${email}...`,
+  await say({
+    text: `🎫 Starting Ticketmaster code watch for ${email}...\n_Searching Textchest + Gmail for 10 minutes_`,
     thread_ts: message.ts
   });
 
-  // Start the watch workflow asynchronously
+  // Start the Textchest+Gmail watch asynchronously
   setImmediate(() => {
-    ticketmasterWatch.startTicketmasterWatch(app, email, message.channel, message.ts)
+    ticketmasterWatch.startTextchestWatch(app, email, message.channel, message.ts)
       .catch(error => {
-        console.error('[TMCODE] Watch failed:', error.message);
+        console.error('[TM] Textchest watch failed:', error.message);
         app.client.chat.postMessage({
           channel: message.channel,
           thread_ts: message.ts,
           text: `:x: Error: ${error.message}`
-        }).catch(e => console.error('[TMCODE] Failed to post error:', e.message));
+        }).catch(e => console.error('[TM] Failed to post error:', e.message));
       });
   });
 });
