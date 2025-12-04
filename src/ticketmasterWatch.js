@@ -138,9 +138,14 @@ async function startTextchestPolling(slackApp, watch, number) {
       // Get messages since watch started
       const messages = await textchest.getMessages(number, 100, startTs);
 
+      console.log(`[TM WATCH] Textchest poll: ${messages.length} messages for ${number}`);
+
       // Filter for Ticketmaster messages
       for (const msg of messages) {
-        const content = msg.body || msg.message || msg.content || '';
+        // Textchest API returns "msg" field for message content
+        const content = msg.msg || msg.body || msg.message || msg.content || '';
+        console.log(`[TM WATCH] Message from ${msg.from}: "${content.substring(0, 50)}..."`);
+
         if (isTicketmasterMessage(content)) {
           // Check if we've already posted this message
           if (!watch.postedMessages) watch.postedMessages = new Set();
