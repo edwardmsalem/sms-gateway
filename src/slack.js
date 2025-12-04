@@ -386,7 +386,7 @@ async function postSpamMessage(senderPhone, recipientPhone, content, spamResult,
     const messagePreview = (content.length > 300 ? content.substring(0, 300) + '...' : content)
       .replace(/\n+/g, ' ')
       .replace(/\*/g, '✱');
-    let parentText = `🚫 *${messagePreview}*\n\n`;
+    let parentText = `🚫 *${messagePreview} *\n\n`;
     parentText += `_${existingThread.count} recipients · ${senderDisplay} · ${senderState || 'Unknown'}`;
     if (bankId === 'maxsip') {
       parentText += ` · Maxsip`;
@@ -411,7 +411,7 @@ async function postSpamMessage(senderPhone, recipientPhone, content, spamResult,
       .replace(/\n+/g, ' ')
       .replace(/\*/g, '✱');
 
-    let text = `🚫 *${messagePreview}*\n\n`;
+    let text = `🚫 *${messagePreview} *\n\n`;
     text += `_${senderDisplay} → ${recipientDisplay} · ${senderState || 'Unknown'}`;
     if (bankId === 'maxsip') {
       text += ` · Maxsip`;
