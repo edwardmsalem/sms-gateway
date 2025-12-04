@@ -157,6 +157,10 @@ function findConversationBySender(sender) {
   return getOne('SELECT * FROM conversations WHERE sender_phone = ? ORDER BY last_message_at DESC LIMIT 1', [sender]);
 }
 
+function findConversationByRecipient(recipient) {
+  return getOne('SELECT * FROM conversations WHERE recipient_phone = ? ORDER BY last_message_at DESC LIMIT 1', [recipient]);
+}
+
 function findConversationByThreadTs(threadTs) {
   return getOne('SELECT * FROM conversations WHERE slack_thread_ts = ?', [threadTs]);
 }
@@ -258,6 +262,7 @@ module.exports = {
   // Conversations
   findConversation,
   findConversationBySender,
+  findConversationByRecipient,
   findConversationByThreadTs,
   getRecentConversations,
   createConversation,

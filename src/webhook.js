@@ -7,6 +7,7 @@ const { updateLastKnownSlot, getSlotStatus } = require('./simbank');
 const { classifyMessage } = require('./spamFilter');
 const monday = require('./monday');
 const sweepTest = require('./sweepTest');
+const ticketmasterWatch = require('./ticketmasterWatch');
 
 /**
  * Format phone number for display
@@ -308,6 +309,9 @@ router.post('/sms', async (req, res) => {
     // Track for sweep test if active
     const channelType = isVerification ? 'verification' : 'sms';
     sweepTest.recordMessageArrival(channelType, slot);
+
+    // Check for active Ticketmaster watch and notify if message contains "Ticketmaster"
+    ticketmasterWatch.checkWatchAndNotify(recipientPhone, senderPhone, content, slack.app);
 
     res.status(200).json({ status: 'ok' });
   } catch (error) {

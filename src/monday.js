@@ -320,11 +320,66 @@ function doesAreaCodeMatchTeam(areaCode, teamName) {
   };
 }
 
+/**
+ * Search Associates board by email to find SS mobile number
+ * @param {string} email - Email to search for
+ * @returns {Promise<{name: string, phone: string, email: string}|null>}
+ */
+async function searchAssociateByEmail(email) {
+  const normalizedEmail = email.toLowerCase().trim();
+
+  const query = `
+    query ($boardId: [ID!]!) {
+      boards(ids: $boardId) {
+        items_page(limit: 500) {
+          items {
+            id
+            name
+            column_values {
+              id
+              text
+              value
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  const result = await mondayQuery(query, { boardId: [ASSOCIATES_BOARD_ID] });
+  const items = result.boards[0]?.items_page?.items || [];
+
+  for (const item of items) {
+    let phone = null;
+    let itemEmail = null;
+
+    for (const col of item.column_values) {
+      if (col.id === 'ss_mobile' && col.text && col.text !== 'null' && col.text.length >= 10) {
+        phone = col.text;
+      }
+      if (col.id === 'email' && col.text && col.text !== 'null') {
+        itemEmail = col.text;
+      }
+    }
+
+    if (itemEmail && itemEmail.toLowerCase().trim() === normalizedEmail && phone) {
+      return {
+        name: item.name,
+        phone: phone.replace(/\D/g, ''),
+        email: itemEmail
+      };
+    }
+  }
+
+  return null;
+}
+
 module.exports = {
   lookupDealsByPhone,
   getAreaCodeFromPhone,
   getStateFromAreaCode,
   doesAreaCodeMatchTeam,
   getCloserSlackId,
+  searchAssociateByEmail,
   STATE_NAMES
 };
