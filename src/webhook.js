@@ -224,17 +224,17 @@ router.post('/sms', async (req, res) => {
       }
     }
 
-    // Look up deals from Monday.com using receiver phone
+    // Look up deals from Monday.com using sender phone (to identify if sender is an associate)
     let deals = [];
     let senderAreaCode = null;
     let senderState = null;
     let senderStateName = null;
     try {
-      deals = await monday.lookupDealsByPhone(recipientPhone);
+      deals = await monday.lookupDealsByPhone(senderPhone);
       senderAreaCode = monday.getAreaCodeFromPhone(senderPhone);
       senderState = monday.getStateFromAreaCode(senderAreaCode);
       senderStateName = monday.STATE_NAMES[senderState] || senderState;
-      console.log(`[MONDAY] Found ${deals.length} deals for ${recipientPhone}, sender from ${senderStateName || 'Unknown'}`);
+      console.log(`[MONDAY] Found ${deals.length} deals for sender ${senderPhone}, from ${senderStateName || 'Unknown'}`);
     } catch (err) {
       console.warn(`[MONDAY] Lookup failed: ${err.message}`);
     }
