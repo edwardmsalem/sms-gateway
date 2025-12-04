@@ -63,7 +63,7 @@ function isVerificationCode(content) {
   return false;
 }
 
-// Approved Slack user IDs who can send SMS via @SMS command
+// Approved Slack user IDs who can send SMS via @SalemAI command
 const APPROVED_SMS_USERS = ['U05BRER83HT', 'U08FY4FAJ9J', 'U0144K906KA'];
 
 // Create an ExpressReceiver so we can mount it on our Express app
@@ -94,7 +94,7 @@ function buildSmsBlocks({ recipientDisplay, senderDisplay, content, bankId, port
   } else {
     text += `From: ${senderDisplay}\n📍 *Bank ${bankId} · Slot ${port}*`;
     if (iccid) text += `\n• *ICCID:* ${iccid}`;
-    text += `\nReceived: ${timestamp}\n\n_Reply: @SMS ${bankId} ${port} followed by your message_`;
+    text += `\nReceived: ${timestamp}\n\n_Reply: @SalemAI ${bankId} ${port} followed by your message_`;
   }
 
   return [{
@@ -159,13 +159,13 @@ function buildEnrichedSmsBlocks({ content, bankId, port, enrichment, iccid }) {
 
     text += '\n';
     text += `"${content}"\n\n`;
-    text += `_Reply: @SMS ${bankId} ${port} followed by your message_`;
+    text += `_Reply: @SalemAI ${bankId} ${port} followed by your message_`;
   } else {
     // Format without deal info
     text += `📥 *New SMS to ${receiverPhoneFormatted}*\n`;
     text += `From: ${senderPhoneFormatted} · ${senderStateName || 'Unknown'}\n\n`;
     text += `"${content}"\n\n`;
-    text += `_Reply: @SMS ${bankId} ${port} followed by your message_`;
+    text += `_Reply: @SalemAI ${bankId} ${port} followed by your message_`;
   }
 
   return [{
@@ -471,10 +471,10 @@ function formatSlotStatusForSlack(status) {
 
 /**
  * App mention handler for thread replies and status checks
- * Usage: @SMS [port] [message] - Send SMS
- * Usage: @SMS status [bank] [slot] - Check slot status
- * Example: @SMS 4.07 Hello there
- * Example: @SMS status 50004 4.07
+ * Usage: @SalemAI [port] [message] - Send SMS
+ * Usage: @SalemAI status [bank] [slot] - Check slot status
+ * Example: @SalemAI 4.07 Hello there
+ * Example: @SalemAI status 50004 4.07
  */
 app.event('app_mention', async ({ event, say }) => {
   await addReaction(event.channel, event.ts, 'eyes');
@@ -490,7 +490,7 @@ app.event('app_mention', async ({ event, say }) => {
 
     if (!bankId || !slot) {
       await say({
-        text: 'Usage: `@SMS status [bank] [slot]`\nExample: `@SMS status 50004 4.07`',
+        text: 'Usage: `@SalemAI status [bank] [slot]`\nExample: `@SalemAI status 50004 4.07`',
         thread_ts: event.thread_ts || event.ts
       });
       return;
@@ -525,13 +525,13 @@ app.event('app_mention', async ({ event, say }) => {
   // Must be in a thread for SMS sending
   if (!event.thread_ts) {
     await say({
-      text: 'Please use @SMS in a conversation thread.\nUsage: `@SMS <bank> <slot> <your message>`\nExample: `@SMS 50004 4.07 Hello there`',
+      text: 'Please use @SalemAI in a conversation thread.\nUsage: `@SalemAI <bank> <slot> <your message>`\nExample: `@SalemAI 50004 4.07 Hello there`',
       thread_ts: event.ts
     });
     return;
   }
 
-  // Parse: @SMS [bank] [slot] [message]
+  // Parse: @SalemAI [bank] [slot] [message]
   const specifiedBank = parts[0];
   const specifiedSlot = parts[1];
   const message = parts.slice(2).join(' ');
@@ -539,7 +539,7 @@ app.event('app_mention', async ({ event, say }) => {
   // Validate bank format (e.g., "50004")
   if (!specifiedBank || !/^\d{5}$/.test(specifiedBank)) {
     await say({
-      text: `Invalid format. Bank ID is required (5 digits).\nUsage: \`@SMS <bank> <slot> <your message>\`\nExample: \`@SMS 50004 4.07 Hello there\``,
+      text: `Invalid format. Bank ID is required (5 digits).\nUsage: \`@SalemAI <bank> <slot> <your message>\`\nExample: \`@SalemAI 50004 4.07 Hello there\``,
       thread_ts: event.thread_ts
     });
     return;
@@ -548,7 +548,7 @@ app.event('app_mention', async ({ event, say }) => {
   // Validate slot format (e.g., "4.07", "1.01")
   if (!specifiedSlot || !/^\d+\.\d+$/.test(specifiedSlot)) {
     await say({
-      text: `Invalid format. Slot is required.\nUsage: \`@SMS <bank> <slot> <your message>\`\nExample: \`@SMS ${specifiedBank} 4.07 Hello there\``,
+      text: `Invalid format. Slot is required.\nUsage: \`@SalemAI <bank> <slot> <your message>\`\nExample: \`@SalemAI ${specifiedBank} 4.07 Hello there\``,
       thread_ts: event.thread_ts
     });
     return;
@@ -556,7 +556,7 @@ app.event('app_mention', async ({ event, say }) => {
 
   if (!message) {
     await say({
-      text: `Message is required.\nUsage: \`@SMS ${specifiedBank} ${specifiedSlot} <your message>\``,
+      text: `Message is required.\nUsage: \`@SalemAI ${specifiedBank} ${specifiedSlot} <your message>\``,
       thread_ts: event.thread_ts
     });
     return;
