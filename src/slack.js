@@ -333,16 +333,13 @@ async function postSpamMessage(senderPhone, recipientPhone, content, spamResult,
     });
 
     // Update parent message with new count
-    const messagePreview = content.length > 200 ? content.substring(0, 200) + '...' : content;
-    let parentText = `🚫 *Spam Blocked (${existingThread.count} recipients)*\n`;
-    parentText += `From: ${senderDisplay} · ${senderState || 'Unknown'}\n`;
+    const messagePreview = content.length > 300 ? content.substring(0, 300) + '...' : content;
+    let parentText = `🚫 *${messagePreview}*\n\n`;
+    parentText += `_${existingThread.count} recipients · ${senderDisplay} · ${senderState || 'Unknown'}`;
     if (bankId === 'maxsip') {
-      parentText += `Source: Maxsip\n`;
-    } else if (bankId) {
-      parentText += `Bank: ${bankId} · Slot: ${slot || 'unknown'}\n`;
+      parentText += ` · Maxsip`;
     }
-    parentText += `Category: ${spamResult.category || 'Unknown'}\n`;
-    parentText += `\n"${messagePreview}"`;
+    parentText += ` · ${spamResult.category || 'Spam'}_`;
 
     try {
       await app.client.chat.update({
@@ -356,21 +353,17 @@ async function postSpamMessage(senderPhone, recipientPhone, content, spamResult,
 
     console.log(`[SPAM THREAD] Added to thread ${existingThread.thread_ts}, count: ${existingThread.count}`);
   } else {
-    // Create new parent message
-    const messagePreview = content.length > 200 ? content.substring(0, 200) + '...' : content;
+    // Create new parent message - message text is the hero
+    const messagePreview = content.length > 300 ? content.substring(0, 300) + '...' : content;
 
-    let text = `🚫 *Spam Blocked*\n`;
-    text += `From: ${senderDisplay} · ${senderState || 'Unknown'}\n`;
-    text += `To: ${recipientDisplay}\n`;
-
+    let text = `🚫 *${messagePreview}*\n\n`;
+    text += `_${senderDisplay} → ${recipientDisplay} · ${senderState || 'Unknown'}`;
     if (bankId === 'maxsip') {
-      text += `Source: Maxsip\n`;
+      text += ` · Maxsip`;
     } else if (bankId) {
-      text += `Bank: ${bankId} · Slot: ${slot || 'unknown'}\n`;
+      text += ` · Bank ${bankId}`;
     }
-
-    text += `Category: ${spamResult.category || 'Unknown'}\n`;
-    text += `\n"${messagePreview}"`;
+    text += ` · ${spamResult.category || 'Spam'}_`;
 
     const result = await app.client.chat.postMessage({
       channel: SPAM_CHANNEL_ID,
