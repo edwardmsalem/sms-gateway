@@ -271,9 +271,6 @@ async function postInboundToThread(threadTs, senderPhone, recipientPhone, conten
   const bankId = conversation?.sim_bank_id || 'unknown';
   const port = conversation?.sim_port || 'PORT';
 
-  // Route verification codes to dedicated channel
-  const targetChannel = isVerificationCode(content) ? VERIFICATION_CHANNEL_ID : CHANNEL_ID;
-
   // Use enriched blocks if enrichment data is provided
   const blocks = enrichment
     ? buildEnrichedSmsBlocks({
@@ -294,13 +291,27 @@ async function postInboundToThread(threadTs, senderPhone, recipientPhone, conten
         iccid: conversation?.iccid
       });
 
+  // Always post to the existing conversation thread in regular channel
   const result = await app.client.chat.postMessage({
-    channel: targetChannel,
+    channel: CHANNEL_ID,
     thread_ts: threadTs,
     reply_broadcast: true,
     text: `New message from ${formatPhoneDisplay(senderPhone)}`,
     blocks
   });
+
+  // If it's a verification code, ALSO post to the verification channel
+  if (isVerificationCode(content)) {
+    try {
+      await app.client.chat.postMessage({
+        channel: VERIFICATION_CHANNEL_ID,
+        text: `New message from ${formatPhoneDisplay(senderPhone)}`,
+        blocks
+      });
+    } catch (err) {
+      console.error('[SLACK] Failed to post to verification channel:', err.message);
+    }
+  }
 
   // If thread didn't exist, result.ts becomes the new thread
   const actualThreadTs = result.message?.thread_ts || result.ts;
@@ -383,8 +394,10 @@ async function postSpamMessage(senderPhone, recipientPhone, content, spamResult,
     });
 
     // Update parent message with new count
-    const messagePreview = content.length > 300 ? content.substring(0, 300) + '...' : content;
-    let parentText = `🚫 *${messagePreview}* \n\n`;
+    const messagePreview = (content.length > 300 ? content.substring(0, 300) + '...' : content)
+      .replace(/\n+/g, ' ')
+      .replace(/\*/g, '✱');
+    let parentText = `🚫 *${messagePreview} *\n\n`;
     parentText += `_${existingThread.count} recipients · ${senderDisplay} · ${senderState || 'Unknown'}`;
     if (bankId === 'maxsip') {
       parentText += ` · Maxsip`;
@@ -404,9 +417,12 @@ async function postSpamMessage(senderPhone, recipientPhone, content, spamResult,
     console.log(`[SPAM THREAD] Added to thread ${existingThread.thread_ts}, count: ${existingThread.count}`);
   } else {
     // Create new parent message - message text is the hero
-    const messagePreview = content.length > 300 ? content.substring(0, 300) + '...' : content;
+    // Replace newlines with spaces and escape asterisks to prevent markdown breaking
+    const messagePreview = (content.length > 300 ? content.substring(0, 300) + '...' : content)
+      .replace(/\n+/g, ' ')
+      .replace(/\*/g, '✱');
 
-    let text = `🚫 *${messagePreview}* \n\n`;
+    let text = `🚫 *${messagePreview} *\n\n`;
     text += `_${senderDisplay} → ${recipientDisplay} · ${senderState || 'Unknown'}`;
     if (bankId === 'maxsip') {
       text += ` · Maxsip`;
