@@ -334,8 +334,6 @@ async function pollGmailForTicketmaster(slackApp, watch, email) {
     return;
   }
 
-  const startTime = Math.floor(Date.now() / 1000);
-
   const pollInterval = setInterval(async () => {
     // Check if watch is still active
     if (Date.now() > watch.endTime) {
@@ -346,11 +344,11 @@ async function pollGmailForTicketmaster(slackApp, watch, email) {
     try {
       // Search for Ticketmaster code emails TO or FROM this specific email address
       // Subject patterns: "Your Authentication Code" or "Your request to reset password"
-      // Use after:timestamp (Unix seconds) to only get emails since watch started
+      // Get emails from last 1 day, we'll show the age
       const response = await gmailClient.users.messages.list({
         userId: 'me',
-        q: `{to:${email} from:${email}} (subject:"authentication code" OR subject:"reset password") after:${startTime}`,
-        maxResults: 10
+        q: `{to:${email} from:${email}} (subject:"authentication code" OR subject:"reset password") newer_than:1d`,
+        maxResults: 5
       });
 
       const messages = response.data.messages || [];
@@ -409,8 +407,25 @@ async function pollGmailForTicketmaster(slackApp, watch, email) {
 
         watch.postedEmails.add(msg.id);
 
+        // Calculate email age
+        const emailTimestamp = parseInt(fullMessage.data.internalDate, 10);
+        const ageMs = Date.now() - emailTimestamp;
+        const ageMinutes = Math.floor(ageMs / 60000);
+        const ageHours = Math.floor(ageMinutes / 60);
+        let ageText;
+        if (ageMinutes < 1) {
+          ageText = 'just now';
+        } else if (ageMinutes < 60) {
+          ageText = `${ageMinutes} minute${ageMinutes === 1 ? '' : 's'} ago`;
+        } else if (ageHours < 24) {
+          ageText = `${ageHours} hour${ageHours === 1 ? '' : 's'} ago`;
+        } else {
+          const ageDays = Math.floor(ageHours / 24);
+          ageText = `${ageDays} day${ageDays === 1 ? '' : 's'} ago`;
+        }
+
         // Post to thread
-        let message = `📧 Ticketmaster email found!\nFrom: ${from}\nSubject: ${subject}`;
+        let message = `📧 Ticketmaster email found! _(${ageText})_`;
         if (code) {
           message += `\n\n🎫 *Code: ${code}*`;
         }
