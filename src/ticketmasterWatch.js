@@ -242,7 +242,7 @@ async function startTicketmasterWatch(slackApp, email, slackChannel, threadTs) {
 
       // Restart the SIM
       try {
-        await textchest.restartSim(textchestNumber.number);
+        await textchest.activateSim(textchestNumber.number);
         await postToThread(slackApp, slackChannel, threadTs,
           `📱 Number activated. Watching for Ticketmaster codes for 10 minutes...`);
       } catch (err) {
@@ -479,7 +479,7 @@ async function startTextchestWatch(slackApp, email, slackChannel, threadTs) {
 
       // Activate Textchest SIM
       try {
-        await textchest.restartSim(textchestNumber.number);
+        await textchest.activateSim(textchestNumber.number);
       } catch (err) {
         await postToThread(slackApp, slackChannel, threadTs,
           `⚠️ Could not activate SIM: ${err.message}`);

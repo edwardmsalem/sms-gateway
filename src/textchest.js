@@ -20,10 +20,16 @@ function getAuthHeader() {
 
 /**
  * Get all numbers from Textchest
- * @returns {Promise<Array<{number: string, tags: string[], email: string}>>}
+ * @param {number} limit - Max numbers to return (default 2000 to cover large inventories)
+ * @returns {Promise<Array<{number: string, tags: string[], email: string, module_uuid: string, slot: string}>>}
  */
-async function getNumbers() {
-  const response = await fetch(`${BASE_URL}/numbers`, {
+async function getNumbers(limit = 2000) {
+  const params = new URLSearchParams({
+    async_inbox: 'true',
+    limit: limit.toString()
+  });
+
+  const response = await fetch(`${BASE_URL}/numbers?${params}`, {
     method: 'GET',
     headers: {
       'Authorization': getAuthHeader()
@@ -42,10 +48,11 @@ async function getNumbers() {
  * @param {string} number - Phone number
  * @param {number} limit - Max messages to return (default 100)
  * @param {number} ts - Only return messages after this timestamp (default 0)
- * @returns {Promise<Array>}
+ * @returns {Promise<Array<{msg: string, ts: number, from: string}>>}
  */
 async function getMessages(number, limit = 100, ts = 0) {
   const params = new URLSearchParams({
+    async_inbox: 'true',
     number,
     limit: limit.toString(),
     ts: ts.toString()
@@ -66,24 +73,25 @@ async function getMessages(number, limit = 100, ts = 0) {
 }
 
 /**
- * Restart/activate a SIM
- * @param {string} number - Phone number to restart
+ * Activate a SIM number
+ * Must be called before using a number to receive SMS
+ * @param {string} number - Phone number to activate
+ * @returns {Promise<{number: string, slot: string, next_number: string, module_uuid: string}>}
  */
-async function restartSim(number) {
-  const formData = new URLSearchParams();
-  formData.append('number', number);
+async function activateSim(number) {
+  const params = new URLSearchParams({
+    number: number.toString().replace(/\D/g, '')
+  });
 
-  const response = await fetch(`${BASE_URL}/restart`, {
-    method: 'POST',
+  const response = await fetch(`${BASE_URL}/activate?${params}`, {
+    method: 'GET',
     headers: {
-      'Authorization': getAuthHeader(),
-      'Content-Type': 'application/x-www-form-urlencoded'
-    },
-    body: formData
+      'Authorization': getAuthHeader()
+    }
   });
 
   if (!response.ok) {
-    throw new Error(`Textchest restart API returned HTTP ${response.status}`);
+    throw new Error(`Textchest activate API returned HTTP ${response.status}`);
   }
 
   return response.json();
@@ -130,6 +138,6 @@ async function findNumberByEmail(email) {
 module.exports = {
   getNumbers,
   getMessages,
-  restartSim,
+  activateSim,
   findNumberByEmail
 };
