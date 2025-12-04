@@ -8,6 +8,7 @@ const { normalizePhone } = require('./utils');
 // Gmail API setup
 let gmail = null;
 let startupTimestamp = null; // Only process emails after this time
+const processedMessageIds = new Set(); // Track processed emails to prevent duplicates
 
 /**
  * Initialize Gmail API client
@@ -290,7 +291,24 @@ async function pollGmail() {
     }
 
     for (const message of messages) {
+      // Skip if already processed (prevents duplicates from race conditions)
+      if (processedMessageIds.has(message.id)) {
+        console.log(`[MAXSIP] Skipping duplicate message: ${message.id}`);
+        continue;
+      }
+
+      // Mark as processed BEFORE processing to prevent race condition
+      processedMessageIds.add(message.id);
+
       await processMaxsipEmail(message);
+
+      // Clean up old IDs (keep last 1000 to prevent memory leak)
+      if (processedMessageIds.size > 1000) {
+        const idsArray = Array.from(processedMessageIds);
+        for (let i = 0; i < 500; i++) {
+          processedMessageIds.delete(idsArray[i]);
+        }
+      }
     }
   } catch (error) {
     console.error('[MAXSIP] Gmail poll error:', error.message);
