@@ -98,9 +98,31 @@ async function findNumberByEmail(email) {
   const numbers = await getNumbers();
   const normalizedEmail = email.toLowerCase().trim();
 
-  const match = numbers.find(n =>
-    n.email && n.email.toLowerCase().trim() === normalizedEmail
-  );
+  console.log(`[TEXTCHEST] Searching for email: ${normalizedEmail}`);
+  console.log(`[TEXTCHEST] Found ${numbers.length} numbers`);
+
+  // Log first few numbers to debug field names
+  if (numbers.length > 0) {
+    console.log(`[TEXTCHEST] Sample number fields:`, Object.keys(numbers[0]));
+  }
+
+  const match = numbers.find(n => {
+    const numEmail = n.email || n.Email || n.EMAIL || '';
+    return numEmail.toLowerCase().trim() === normalizedEmail;
+  });
+
+  if (match) {
+    console.log(`[TEXTCHEST] Found match:`, match.number || match.Number);
+  } else {
+    // Log numbers that have similar emails for debugging
+    const similar = numbers.filter(n => {
+      const numEmail = (n.email || n.Email || n.EMAIL || '').toLowerCase();
+      return numEmail.includes(normalizedEmail.split('@')[0]);
+    });
+    if (similar.length > 0) {
+      console.log(`[TEXTCHEST] Similar emails found:`, similar.map(n => n.email || n.Email || n.EMAIL));
+    }
+  }
 
   return match || null;
 }
