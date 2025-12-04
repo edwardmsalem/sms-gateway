@@ -364,12 +364,12 @@ async function searchAssociateByEmail(email) {
     let itemEmail = null;
 
     for (const col of item.column_values) {
+      // Use ss_mobile for phone (ss_phone is mirrored/blank)
       if (col.id === 'ss_mobile' && col.text && col.text !== 'null' && col.text.length >= 10) {
         phone = col.text;
       }
-      // Check multiple possible email column IDs
-      if ((col.id === 'email' || col.id === 'email__1' || col.id === 'dup__of_email' || col.id === 'text') &&
-          col.text && col.text !== 'null' && col.text.includes('@')) {
+      // Use ss_email for email
+      if (col.id === 'ss_email' && col.text && col.text !== 'null' && col.text.includes('@')) {
         itemEmail = col.text;
       }
     }
