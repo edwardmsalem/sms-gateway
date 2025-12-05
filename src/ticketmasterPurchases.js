@@ -1,38 +1,17 @@
 /**
  * Ticketmaster Purchase Email Scraper
- * Monitors forwarded "You Got Tickets To" emails and extracts purchase info to Google Sheets
+ * Monitors forwarded "You Got Tickets To" emails and extracts purchase info to Monday.com
  */
 
 const { google } = require('googleapis');
 const db = require('./database');
 
-// Clients (lazily initialized)
+// Gmail client (lazily initialized)
 let gmail = null;
-let sheets = null;
 let oauth2Client = null;
 
-// Sheet ID from environment
-const SHEET_ID = process.env.TM_PURCHASES_SHEET_ID || '1qf3bofd-96JN27wPN75ZcaEuLgRWwh-SPfHxa4HzRtk';
-
-// Sheet columns (will auto-create header row if empty)
-const COLUMNS = [
-  'Date Processed',
-  'Email Date',
-  'TM Account',
-  'Event',
-  'Venue',
-  'City/State',
-  'Event Date',
-  'Event Time',
-  'Section',
-  'Row',
-  'Low Seat',
-  'High Seat',
-  'Quantity',
-  'Order #',
-  'Total Price',
-  'Email ID'
-];
+// Monday.com API
+const MONDAY_API_URL = 'https://api.monday.com/v2';
 
 /**
  * Initialize OAuth2 client
@@ -71,16 +50,55 @@ function getGmailClient() {
 }
 
 /**
- * Initialize Sheets client
+ * Monday.com GraphQL query
  */
-function getSheetsClient() {
-  if (sheets) return sheets;
+async function mondayQuery(query, variables = {}) {
+  const token = process.env.MONDAY_API_TOKEN;
+  if (!token) {
+    throw new Error('MONDAY_API_TOKEN environment variable is not set');
+  }
 
-  const auth = getOAuth2Client();
-  if (!auth) return null;
+  const response = await fetch(MONDAY_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': token,
+      'API-Version': '2024-01'
+    },
+    body: JSON.stringify({ query, variables })
+  });
 
-  sheets = google.sheets({ version: 'v4', auth });
-  return sheets;
+  if (!response.ok) {
+    throw new Error(`Monday.com API returned HTTP ${response.status}`);
+  }
+
+  const data = await response.json();
+  if (data.errors) {
+    const errorMsg = data.errors[0]?.message || JSON.stringify(data.errors);
+    throw new Error('Monday.com query failed: ' + errorMsg);
+  }
+  return data.data;
+}
+
+/**
+ * Create an item in Monday.com board
+ */
+async function createMondayItem(boardId, itemName, columnValues) {
+  const query = `
+    mutation ($boardId: ID!, $itemName: String!, $columnValues: JSON!) {
+      create_item(board_id: $boardId, item_name: $itemName, column_values: $columnValues) {
+        id
+      }
+    }
+  `;
+
+  const result = await mondayQuery(query, {
+    boardId: boardId,
+    itemName: itemName,
+    columnValues: JSON.stringify(columnValues)
+  });
+
+  return result.create_item?.id;
 }
 
 /**
@@ -102,65 +120,6 @@ function markEmailProcessed(emailId) {
     'INSERT OR IGNORE INTO processed_tm_emails (email_id) VALUES (?)',
     [emailId]
   );
-}
-
-/**
- * Ensure the sheet has headers
- */
-async function ensureSheetHeaders() {
-  const sheetsClient = getSheetsClient();
-  if (!sheetsClient) return false;
-
-  try {
-    // Check if first row has data
-    const response = await sheetsClient.spreadsheets.values.get({
-      spreadsheetId: SHEET_ID,
-      range: 'A1:P1'
-    });
-
-    const values = response.data.values;
-    if (!values || values.length === 0 || !values[0] || values[0].length === 0) {
-      // Add headers
-      await sheetsClient.spreadsheets.values.update({
-        spreadsheetId: SHEET_ID,
-        range: 'A1',
-        valueInputOption: 'RAW',
-        requestBody: {
-          values: [COLUMNS]
-        }
-      });
-      console.log('[TM Purchases] Created header row in sheet');
-    }
-
-    return true;
-  } catch (error) {
-    console.error('[TM Purchases] Error ensuring headers:', error.message);
-    return false;
-  }
-}
-
-/**
- * Append a row to the sheet
- */
-async function appendToSheet(rowData) {
-  const sheetsClient = getSheetsClient();
-  if (!sheetsClient) return false;
-
-  try {
-    await sheetsClient.spreadsheets.values.append({
-      spreadsheetId: SHEET_ID,
-      range: 'A:P',
-      valueInputOption: 'RAW',
-      insertDataOption: 'INSERT_ROWS',
-      requestBody: {
-        values: [rowData]
-      }
-    });
-    return true;
-  } catch (error) {
-    console.error('[TM Purchases] Error appending to sheet:', error.message);
-    return false;
-  }
 }
 
 /**
@@ -236,7 +195,6 @@ function parsePurchaseDetails(body, subject) {
   }
 
   // Extract TM Account - the original "To:" address in the forwarded email
-  // Look for patterns like "To: email@example.com" or "To:" followed by email
   const toMatch = body.match(/(?:^|\n)\s*To:\s*<?([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})>?/im);
   if (toMatch) {
     details.tmAccount = toMatch[1].toLowerCase();
@@ -249,7 +207,6 @@ function parsePurchaseDetails(body, subject) {
   }
 
   // Extract date/time (e.g., "Tue · Apr 14, 2026 · 7:30 PM" or similar)
-  // Handle both plain text and HTML entities
   const dateTimeMatch = body.match(/(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s*[·•]\s*([A-Z][a-z]{2}\s+\d{1,2},?\s+\d{4})\s*[·•]\s*(\d{1,2}:\d{2}\s*(?:AM|PM))/i);
   if (dateTimeMatch) {
     details.eventDate = dateTimeMatch[1];
@@ -257,19 +214,15 @@ function parsePurchaseDetails(body, subject) {
   }
 
   // Extract venue and location
-  // Look for venue pattern - usually after location icon or in specific format
-  // Pattern: "Venue Name — City, State" or "Venue Name - City, State"
   const venueMatch = body.match(/(?:\n|>)\s*([A-Za-z0-9\s&'.()-]+(?:Arena|Center|Coliseum|Stadium|Theatre|Theater|Hall|Garden|Pavilion|Amphitheatre|Amphitheater|Field|Park|Dome))\s*[—–-]\s*([^<\n]+)/i);
   if (venueMatch) {
     details.venue = venueMatch[1].trim();
     details.cityState = venueMatch[2].trim();
   } else {
-    // Try alternate pattern
     const altVenueMatch = body.match(/First Horizon Coliseum|Madison Square Garden|[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\s+(?:Arena|Center|Coliseum|Stadium|Theatre|Theater|Hall|Garden|Pavilion)/);
     if (altVenueMatch) {
       details.venue = altVenueMatch[0];
     }
-    // Look for city, state pattern
     const cityStateMatch = body.match(/([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*|[A-Z]{2})\s*(?:<|$|\n)/);
     if (cityStateMatch) {
       details.cityState = `${cityStateMatch[1]}, ${cityStateMatch[2]}`;
@@ -277,7 +230,6 @@ function parsePurchaseDetails(body, subject) {
   }
 
   // Extract section, row, seats (e.g., "Sec 233, Row Z, Seat 9 - 12")
-  // Handle various formats: "Sec 233", "Section 233", etc.
   const seatMatch = body.match(/Sec(?:tion)?\s*(\w+),?\s*Row\s*(\w+),?\s*Seat\s*(\d+)\s*[-–]\s*(\d+)/i);
   if (seatMatch) {
     details.section = seatMatch[1];
@@ -286,7 +238,6 @@ function parsePurchaseDetails(body, subject) {
     details.highSeat = seatMatch[4];
     details.quantity = (parseInt(seatMatch[4]) - parseInt(seatMatch[3]) + 1).toString();
   } else {
-    // Try single seat or GA
     const singleSeatMatch = body.match(/Sec(?:tion)?\s*(\w+),?\s*Row\s*(\w+),?\s*Seat\s*(\d+)(?:\s|<|$)/i);
     if (singleSeatMatch) {
       details.section = singleSeatMatch[1];
@@ -297,7 +248,7 @@ function parsePurchaseDetails(body, subject) {
     }
   }
 
-  // Extract total price (e.g., "Total: $222.80" or "Total:  $222.80")
+  // Extract total price (e.g., "Total: $222.80")
   const priceMatch = body.match(/Total:\s*\$?([\d,]+\.?\d*)/i);
   if (priceMatch) {
     details.totalPrice = '$' + priceMatch[1];
@@ -326,15 +277,16 @@ async function scanPurchaseEmails(sinceDate = null) {
     return { processed: 0, errors: 0, skipped: 0 };
   }
 
-  // Ensure sheet has headers
-  await ensureSheetHeaders();
+  const boardId = process.env.TM_PURCHASES_BOARD_ID;
+  if (!boardId) {
+    console.log('[TM Purchases] TM_PURCHASES_BOARD_ID not set');
+    return { processed: 0, errors: 0, skipped: 0 };
+  }
 
   // Build search query
-  // Subject starts with "FW: You Got Tickets To"
   let query = 'subject:"FW: You Got Tickets To"';
 
   if (sinceDate) {
-    // Format date as YYYY/MM/DD for Gmail
     const dateStr = sinceDate.toISOString().split('T')[0].replace(/-/g, '/');
     query += ` after:${dateStr}`;
   }
@@ -348,7 +300,6 @@ async function scanPurchaseEmails(sinceDate = null) {
 
   try {
     do {
-      // Search for emails
       const listResponse = await gmailClient.users.messages.list({
         userId: 'me',
         q: query,
@@ -361,13 +312,11 @@ async function scanPurchaseEmails(sinceDate = null) {
 
       for (const msg of messages) {
         try {
-          // Skip if already processed
           if (isEmailProcessed(msg.id)) {
             skipped++;
             continue;
           }
 
-          // Get full message
           const fullMsg = await gmailClient.users.messages.get({
             userId: 'me',
             id: msg.id,
@@ -379,35 +328,39 @@ async function scanPurchaseEmails(sinceDate = null) {
           const date = getHeader(headers, 'Date');
           const body = getEmailBody(fullMsg.data.payload);
 
-          // Parse purchase details
           const details = parsePurchaseDetails(body, subject);
 
-          // Build row data
-          const rowData = [
-            new Date().toISOString(),           // Date Processed
-            date,                                // Email Date
-            details.tmAccount,                   // TM Account
-            details.event,                       // Event
-            details.venue,                       // Venue
-            details.cityState,                   // City/State
-            details.eventDate,                   // Event Date
-            details.eventTime,                   // Event Time
-            details.section,                     // Section
-            details.row,                         // Row
-            details.lowSeat,                     // Low Seat
-            details.highSeat,                    // High Seat
-            details.quantity,                    // Quantity
-            details.orderNumber,                 // Order #
-            details.totalPrice,                  // Total Price
-            msg.id                               // Email ID
-          ];
+          // Build Monday.com column values
+          // Column IDs will need to match your board's columns
+          const columnValues = {
+            'text': details.tmAccount,           // TM Account (text column)
+            'text4': details.venue,              // Venue
+            'text8': details.cityState,          // City/State
+            'date4': details.eventDate ? { date: formatMondayDate(details.eventDate) } : null, // Event Date
+            'text0': details.eventTime,          // Event Time
+            'text6': details.section,            // Section
+            'text7': details.row,                // Row
+            'numbers': details.lowSeat,          // Low Seat
+            'numbers8': details.highSeat,        // High Seat
+            'numbers0': details.quantity,        // Quantity
+            'text9': details.orderNumber,        // Order #
+            'text00': details.totalPrice         // Total Price
+          };
 
-          // Append to sheet
-          const success = await appendToSheet(rowData);
-          if (success) {
+          // Remove null values
+          Object.keys(columnValues).forEach(key => {
+            if (columnValues[key] === null || columnValues[key] === '') {
+              delete columnValues[key];
+            }
+          });
+
+          // Create item with event name as the item name
+          const itemId = await createMondayItem(boardId, details.event || 'Unknown Event', columnValues);
+
+          if (itemId) {
             markEmailProcessed(msg.id);
             processed++;
-            console.log(`[TM Purchases] Processed: ${details.event} - ${details.orderNumber}`);
+            console.log(`[TM Purchases] Created: ${details.event} - ${details.orderNumber}`);
           } else {
             errors++;
           }
@@ -428,6 +381,20 @@ async function scanPurchaseEmails(sinceDate = null) {
 
   console.log(`[TM Purchases] Complete: ${processed} processed, ${skipped} skipped, ${errors} errors`);
   return { processed, errors, skipped };
+}
+
+/**
+ * Format date string to Monday.com format (YYYY-MM-DD)
+ */
+function formatMondayDate(dateStr) {
+  try {
+    // Parse "Apr 14, 2026" format
+    const date = new Date(dateStr);
+    if (isNaN(date.getTime())) return null;
+    return date.toISOString().split('T')[0];
+  } catch (e) {
+    return null;
+  }
 }
 
 /**
@@ -453,7 +420,7 @@ async function runHourlyScan() {
  */
 let schedulerInterval = null;
 
-function startScheduler(intervalMs = 60 * 60 * 1000) { // Default: 1 hour
+function startScheduler(intervalMs = 60 * 60 * 1000) {
   if (schedulerInterval) {
     console.log('[TM Purchases] Scheduler already running');
     return;
@@ -483,6 +450,5 @@ module.exports = {
   runInitialScan,
   runHourlyScan,
   startScheduler,
-  stopScheduler,
-  ensureSheetHeaders
+  stopScheduler
 };
