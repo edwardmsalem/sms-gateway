@@ -214,16 +214,19 @@ function parsePurchaseDetails(body, subject) {
   }
 
   // Extract venue and location
-  const venueMatch = body.match(/(?:\n|>)\s*([A-Za-z0-9\s&'.()-]+(?:Arena|Center|Coliseum|Stadium|Theatre|Theater|Hall|Garden|Pavilion|Amphitheatre|Amphitheater|Field|Park|Dome))\s*[—–-]\s*([^<\n]+)/i);
+  // Look for "Venue Name — City, ST" or "Venue Name - City, ST" pattern
+  const venueMatch = body.match(/([A-Za-z0-9\s&'.()-]+(?:Arena|Center|Coliseum|Stadium|Theatre|Theater|Hall|Garden|Pavilion|Amphitheatre|Amphitheater|Field|Park|Dome))\s*[—–-]\s*([A-Za-z\s]+),\s*([A-Z]{2})/i);
   if (venueMatch) {
     details.venue = venueMatch[1].trim();
-    details.cityState = venueMatch[2].trim();
+    details.cityState = `${venueMatch[2].trim()}, ${venueMatch[3]}`;
   } else {
+    // Try to find venue name alone
     const altVenueMatch = body.match(/First Horizon Coliseum|Madison Square Garden|[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\s+(?:Arena|Center|Coliseum|Stadium|Theatre|Theater|Hall|Garden|Pavilion)/);
     if (altVenueMatch) {
       details.venue = altVenueMatch[0];
     }
-    const cityStateMatch = body.match(/([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*|[A-Z]{2})\s*(?:<|$|\n)/);
+    // Look for US city, STATE pattern (2-letter state code required)
+    const cityStateMatch = body.match(/([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),\s*([A-Z]{2})(?:\s|<|$|\n)/);
     if (cityStateMatch) {
       details.cityState = `${cityStateMatch[1]}, ${cityStateMatch[2]}`;
     }
