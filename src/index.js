@@ -7,6 +7,7 @@ const { router: webhookRouter } = require('./webhook');
 const { app: slackApp, receiver: slackReceiver } = require('./slack');
 const { loadSimBanksFromEnv, formatDateTime } = require('./utils');
 const maxsip = require('./maxsip');
+const tmPurchases = require('./ticketmasterPurchases');
 
 const PORT = process.env.PORT || 3000;
 
@@ -88,6 +89,11 @@ async function main() {
     const gmailInitialized = await maxsip.initGmail();
     if (gmailInitialized) {
       maxsip.startPolling(30000); // Poll every 30 seconds
+    }
+
+    // Initialize Ticketmaster purchase scraper (if configured)
+    if (process.env.TM_GMAIL_REFRESH_TOKEN && process.env.TM_PURCHASES_SHEET_ID) {
+      tmPurchases.startScheduler(60 * 60 * 1000); // Run every hour
     }
   });
 
