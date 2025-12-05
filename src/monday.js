@@ -2,6 +2,7 @@ const MONDAY_API_URL = 'https://api.monday.com/v2';
 const ASSOCIATES_BOARD_ID = '7511353761';
 const DEALS_BOARD_ID = '7511353910';
 const EXTERNAL_EMAILS_BOARD_ID = '18391136284';
+const EXTERNAL_PHONE_COLUMN_ID = 'phone_mkybs1xx';
 const IGNORED_STATUSES = ['Closed'];
 
 async function mondayQuery(query, variables = {}) {
@@ -439,16 +440,11 @@ async function searchExternalByEmail(email) {
     const itemEmail = item.name;
 
     if (itemEmail && itemEmail.toLowerCase().trim() === normalizedEmail) {
-      // Find phone column - look for columns with 'phone' in the ID
-      let phone = null;
-      for (const col of item.column_values) {
-        const colIdLower = col.id.toLowerCase();
-        if ((colIdLower.includes('phone') || colIdLower.includes('ss_phone')) &&
-            col.text && col.text !== 'null' && col.text.length >= 10) {
-          phone = col.text;
-          break;
-        }
-      }
+      // Get phone from the SS Phone column (phone_mkybs1xx)
+      const phoneCol = item.column_values.find(col => col.id === EXTERNAL_PHONE_COLUMN_ID);
+      const phone = phoneCol?.text && phoneCol.text !== 'null' && phoneCol.text.length >= 10
+        ? phoneCol.text
+        : null;
 
       if (phone) {
         console.log(`[MONDAY] Found external match: ${itemEmail}, phone=${phone}`);
