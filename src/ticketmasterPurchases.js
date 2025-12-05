@@ -330,21 +330,20 @@ async function scanPurchaseEmails(sinceDate = null) {
 
           const details = parsePurchaseDetails(body, subject);
 
-          // Build Monday.com column values
-          // Column IDs will need to match your board's columns
+          // Build Monday.com column values (column IDs from board)
           const columnValues = {
-            'text': details.tmAccount,           // TM Account (text column)
-            'text4': details.venue,              // Venue
-            'text8': details.cityState,          // City/State
+            'email_mkybwtx9': details.tmAccount ? { email: details.tmAccount, text: details.tmAccount } : null, // TM Account
+            'text_mkyb65e9': details.venue,              // Venue
+            'text_mkybdyt9': details.cityState,          // City/State
             'date4': details.eventDate ? { date: formatMondayDate(details.eventDate) } : null, // Event Date
-            'text0': details.eventTime,          // Event Time
-            'text6': details.section,            // Section
-            'text7': details.row,                // Row
-            'numbers': details.lowSeat,          // Low Seat
-            'numbers8': details.highSeat,        // High Seat
-            'numbers0': details.quantity,        // Quantity
-            'text9': details.orderNumber,        // Order #
-            'text00': details.totalPrice         // Total Price
+            'text_mkybzdft': details.eventTime,          // Event Time
+            'text_mkybpe84': details.section,            // Section
+            'text_mkybsxmr': details.row,                // Row
+            'numeric_mkyb5sqp': details.lowSeat,         // Low Seat
+            'numeric_mkyb4cs': details.highSeat,         // High Seat
+            'numeric_mkybzsxh': details.quantity,        // Quantity
+            'text_mkybck6m': details.orderNumber,        // Order #
+            'text_mkybv5ey': details.totalPrice          // Total Price
           };
 
           // Remove null values
@@ -416,6 +415,14 @@ async function runHourlyScan() {
 }
 
 /**
+ * Clear all processed email records to allow rescan
+ */
+function clearProcessedEmails() {
+  db.run('DELETE FROM processed_tm_emails');
+  console.log('[TM Purchases] Cleared processed emails - will rescan all');
+}
+
+/**
  * Start the hourly scheduler
  */
 let schedulerInterval = null;
@@ -427,6 +434,11 @@ function startScheduler(intervalMs = 60 * 60 * 1000) {
   }
 
   console.log(`[TM Purchases] Starting scheduler (interval: ${intervalMs / 1000 / 60} minutes)`);
+
+  // Check if rescan requested via env var
+  if (process.env.RESCAN_TM_PURCHASES === 'true') {
+    clearProcessedEmails();
+  }
 
   // Run initial scan immediately
   runInitialScan().catch(err => console.error('[TM Purchases] Initial scan error:', err));
