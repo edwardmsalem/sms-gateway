@@ -1,6 +1,8 @@
 const MONDAY_API_URL = 'https://api.monday.com/v2';
 const ASSOCIATES_BOARD_ID = '7511353761';
 const DEALS_BOARD_ID = '7511353910';
+const EXTERNAL_EMAILS_BOARD_ID = '18391136284';
+const EXTERNAL_PHONE_COLUMN_ID = 'phone_mkybs1xx';
 const IGNORED_STATUSES = ['Closed'];
 
 async function mondayQuery(query, variables = {}) {
@@ -393,6 +395,74 @@ async function searchAssociateByEmail(email) {
   return null;
 }
 
+/**
+ * Search External Emails board by email (item name) to find linked phone number
+ * This board is for non-associate emails (external TM accounts)
+ * @param {string} email - Email to search for
+ * @returns {Promise<{name: string, phone: string, email: string}|null>}
+ */
+async function searchExternalByEmail(email) {
+  const normalizedEmail = email.toLowerCase().trim();
+
+  console.log(`[MONDAY] Searching External Emails board for: ${normalizedEmail}`);
+
+  const query = `
+    query ($boardId: [ID!]!) {
+      boards(ids: $boardId) {
+        items_page(limit: 500) {
+          items {
+            id
+            name
+            column_values {
+              id
+              text
+              value
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  const result = await mondayQuery(query, { boardId: [EXTERNAL_EMAILS_BOARD_ID] });
+  const items = result.boards[0]?.items_page?.items || [];
+
+  console.log(`[MONDAY] Found ${items.length} external email entries`);
+
+  // Log column IDs from first item to debug
+  if (items.length > 0) {
+    const colIds = items[0].column_values.map(c => `${c.id}=${c.text || '(empty)'}`);
+    console.log(`[MONDAY] External board columns: ${colIds.join(', ')}`);
+  }
+
+  for (const item of items) {
+    // Email is stored in item.name (the "Tm account" column)
+    const itemEmail = item.name;
+
+    if (itemEmail && itemEmail.toLowerCase().trim() === normalizedEmail) {
+      // Get phone from the SS Phone column (phone_mkybs1xx)
+      const phoneCol = item.column_values.find(col => col.id === EXTERNAL_PHONE_COLUMN_ID);
+      const phone = phoneCol?.text && phoneCol.text !== 'null' && phoneCol.text.length >= 10
+        ? phoneCol.text
+        : null;
+
+      if (phone) {
+        console.log(`[MONDAY] Found external match: ${itemEmail}, phone=${phone}`);
+        return {
+          name: itemEmail, // Use email as name since this is external
+          phone: phone.replace(/\D/g, ''),
+          email: itemEmail
+        };
+      } else {
+        console.log(`[MONDAY] Found email ${itemEmail} but no phone number`);
+      }
+    }
+  }
+
+  console.log(`[MONDAY] No external match found for ${normalizedEmail}`);
+  return null;
+}
+
 module.exports = {
   lookupDealsByPhone,
   getAreaCodeFromPhone,
@@ -400,5 +470,6 @@ module.exports = {
   doesAreaCodeMatchTeam,
   getCloserSlackId,
   searchAssociateByEmail,
+  searchExternalByEmail,
   STATE_NAMES
 };
