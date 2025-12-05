@@ -92,7 +92,7 @@ async function main() {
     }
 
     // Initialize Ticketmaster purchase scraper (if configured)
-    if (process.env.TM_GMAIL_REFRESH_TOKEN && process.env.TM_PURCHASES_SHEET_ID) {
+    if (process.env.TM_GMAIL_REFRESH_TOKEN && process.env.TM_PURCHASES_BOARD_ID) {
       tmPurchases.startScheduler(60 * 60 * 1000); // Run every hour
     }
   });
