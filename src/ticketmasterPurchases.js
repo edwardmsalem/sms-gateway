@@ -332,6 +332,7 @@ async function scanPurchaseEmails(sinceDate = null) {
 
           // Build Monday.com column values (column IDs from board)
           const columnValues = {
+            'email_mkybwtx9': details.tmAccount ? { email: details.tmAccount, text: details.tmAccount } : null, // TM Account
             'text_mkyb65e9': details.venue,              // Venue
             'text_mkybdyt9': details.cityState,          // City/State
             'date4': details.eventDate ? { date: formatMondayDate(details.eventDate) } : null, // Event Date
