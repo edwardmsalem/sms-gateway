@@ -523,24 +523,34 @@ async function startTextchestWatch(slackApp, email, slackChannel, threadTs) {
           `⚠️ Could not activate: ${err.message}`);
       }
     } else {
-      // Step 2: Try Monday.com for SS number
+      // Step 2: Try Monday.com for SS number (Associates board)
       await postToThread(slackApp, slackChannel, threadTs,
         `Not in Textchest. Checking Monday.com...`);
 
-      const associate = await monday.searchAssociateByEmail(email);
+      let foundRecord = await monday.searchAssociateByEmail(email);
+      let recordSource = 'associate';
 
-      if (associate) {
-        phoneDisplay = formatPhoneDisplay(associate.phone);
+      // Step 3: If not in Associates, try External Emails board
+      if (!foundRecord) {
+        foundRecord = await monday.searchExternalByEmail(email);
+        recordSource = 'external';
+      }
 
+      if (foundRecord) {
+        phoneDisplay = formatPhoneDisplay(foundRecord.phone);
+
+        const sourceLabel = recordSource === 'associate'
+          ? `Found ${foundRecord.name} · ${phoneDisplay}`
+          : `Found external: ${phoneDisplay}`;
         await postToThread(slackApp, slackChannel, threadTs,
-          `Found ${associate.name} · ${phoneDisplay}. Searching SIM banks...`);
+          `${sourceLabel}. Searching SIM banks...`);
 
         // Query SIM banks directly to find which slot has this number
-        const slotInfo = await simbank.findSlotByPhone(associate.phone);
+        const slotInfo = await simbank.findSlotByPhone(foundRecord.phone);
 
         if (slotInfo) {
           smsSource = 'ss';
-          watchKey = normalizePhone(associate.phone);
+          watchKey = normalizePhone(foundRecord.phone);
 
           await postToThread(slackApp, slackChannel, threadTs,
             `✅ Found on Bank ${slotInfo.bankId} Slot ${slotInfo.slot}`);
@@ -564,7 +574,7 @@ async function startTextchestWatch(slackApp, email, slackChannel, threadTs) {
         }
       } else {
         await postToThread(slackApp, slackChannel, threadTs,
-          `Not found in Monday.com`);
+          `Not found in Monday.com (Associates or External)`);
       }
     }
 
