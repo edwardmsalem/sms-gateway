@@ -415,6 +415,14 @@ async function runHourlyScan() {
 }
 
 /**
+ * Clear all processed email records to allow rescan
+ */
+function clearProcessedEmails() {
+  db.run('DELETE FROM processed_tm_emails');
+  console.log('[TM Purchases] Cleared processed emails - will rescan all');
+}
+
+/**
  * Start the hourly scheduler
  */
 let schedulerInterval = null;
@@ -426,6 +434,11 @@ function startScheduler(intervalMs = 60 * 60 * 1000) {
   }
 
   console.log(`[TM Purchases] Starting scheduler (interval: ${intervalMs / 1000 / 60} minutes)`);
+
+  // Check if rescan requested via env var
+  if (process.env.RESCAN_TM_PURCHASES === 'true') {
+    clearProcessedEmails();
+  }
 
   // Run initial scan immediately
   runInitialScan().catch(err => console.error('[TM Purchases] Initial scan error:', err));
