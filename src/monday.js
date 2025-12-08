@@ -332,66 +332,101 @@ async function searchAssociateByEmail(email) {
 
   console.log(`[MONDAY] Searching for email: ${normalizedEmail}`);
 
-  const query = `
-    query ($boardId: [ID!]!) {
-      boards(ids: $boardId) {
-        items_page(limit: 500) {
-          items {
-            id
-            name
-            column_values {
+  let cursor = null;
+  let totalItems = 0;
+  let pageNum = 0;
+
+  do {
+    pageNum++;
+    const query = cursor ? `
+      query ($boardId: [ID!]!, $cursor: String!) {
+        boards(ids: $boardId) {
+          items_page(limit: 500, cursor: $cursor) {
+            cursor
+            items {
               id
-              text
-              value
+              name
+              column_values {
+                id
+                text
+                value
+              }
             }
           }
         }
       }
-    }
-  `;
-
-  const result = await mondayQuery(query, { boardId: [ASSOCIATES_BOARD_ID] });
-  const items = result.boards[0]?.items_page?.items || [];
-
-  console.log(`[MONDAY] Found ${items.length} associates`);
-
-  // Log column IDs from first item to debug
-  if (items.length > 0) {
-    const colIds = items[0].column_values.map(c => c.id);
-    console.log(`[MONDAY] Column IDs: ${colIds.join(', ')}`);
-  }
-
-  for (const item of items) {
-    let phone = null;
-    let itemEmail = null;
-
-    for (const col of item.column_values) {
-      // Use ss_mobile for phone (ss_phone is mirrored/blank)
-      if (col.id === 'ss_mobile' && col.text && col.text !== 'null' && col.text.length >= 10) {
-        phone = col.text;
+    ` : `
+      query ($boardId: [ID!]!) {
+        boards(ids: $boardId) {
+          items_page(limit: 500) {
+            cursor
+            items {
+              id
+              name
+              column_values {
+                id
+                text
+                value
+              }
+            }
+          }
+        }
       }
-      // Use ss_email for email
-      if (col.id === 'ss_email' && col.text && col.text !== 'null' && col.text.includes('@')) {
-        itemEmail = col.text;
+    `;
+
+    const variables = cursor
+      ? { boardId: [ASSOCIATES_BOARD_ID], cursor }
+      : { boardId: [ASSOCIATES_BOARD_ID] };
+
+    const result = await mondayQuery(query, variables);
+    const itemsPage = result.boards[0]?.items_page;
+    const items = itemsPage?.items || [];
+    cursor = itemsPage?.cursor;
+    totalItems += items.length;
+
+    console.log(`[MONDAY] Page ${pageNum}: ${items.length} associates (total: ${totalItems})`);
+
+    // Log column IDs from first item on first page
+    if (pageNum === 1 && items.length > 0) {
+      const colIds = items[0].column_values.map(c => c.id);
+      console.log(`[MONDAY] Column IDs: ${colIds.join(', ')}`);
+    }
+
+    for (const item of items) {
+      let phone = null;
+      let itemEmail = null;
+
+      for (const col of item.column_values) {
+        // Use ss_mobile for phone (ss_phone is mirrored/blank)
+        if (col.id === 'ss_mobile' && col.text && col.text !== 'null' && col.text.length >= 10) {
+          phone = col.text;
+        }
+        // Use ss_email for email
+        if (col.id === 'ss_email' && col.text && col.text !== 'null' && col.text.includes('@')) {
+          itemEmail = col.text;
+        }
+      }
+
+      // Debug: log if email matches but phone is missing
+      if (itemEmail && itemEmail.toLowerCase().trim() === normalizedEmail) {
+        console.log(`[MONDAY] Email match found: ${item.name}, email=${itemEmail}, phone=${phone || 'MISSING'}`);
+        if (!phone) {
+          console.log(`[MONDAY] ⚠️ Email matches but ss_mobile is empty - cannot proceed without phone`);
+        }
+      }
+
+      if (itemEmail && itemEmail.toLowerCase().trim() === normalizedEmail && phone) {
+        console.log(`[MONDAY] Found match: ${item.name}, phone=${phone}`);
+        return {
+          name: item.name,
+          phone: phone.replace(/\D/g, ''),
+          email: itemEmail
+        };
       }
     }
+  } while (cursor);
 
-    // Debug: log associates that have emails
-    if (itemEmail && itemEmail.toLowerCase().includes(normalizedEmail.split('@')[0])) {
-      console.log(`[MONDAY] Potential match: ${item.name}, email=${itemEmail}, phone=${phone}`);
-    }
-
-    if (itemEmail && itemEmail.toLowerCase().trim() === normalizedEmail && phone) {
-      console.log(`[MONDAY] Found match: ${item.name}, phone=${phone}`);
-      return {
-        name: item.name,
-        phone: phone.replace(/\D/g, ''),
-        email: itemEmail
-      };
-    }
-  }
-
-  console.log(`[MONDAY] No match found for ${normalizedEmail}`);
+  console.log(`[MONDAY] No match found for ${normalizedEmail} (searched ${totalItems} associates)`);
   return null;
 }
 
