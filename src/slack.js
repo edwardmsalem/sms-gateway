@@ -539,8 +539,8 @@ function formatSlotStatusForSlack(status) {
 app.event('app_mention', async ({ event, say }) => {
   await addReaction(event.channel, event.ts, 'eyes');
 
-  // Parse the command text
-  const fullText = event.text.replace(/<@[A-Z0-9]+>/g, '').trim();
+  // Parse the command text - handle both <@U123> and <@U123|username> formats
+  const fullText = event.text.replace(/<@[A-Z0-9]+(\|[^>]+)?>/gi, '').trim();
   const parts = fullText.split(/\s+/);
 
   // Check if this is a status command
