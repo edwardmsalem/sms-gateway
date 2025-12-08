@@ -6,7 +6,8 @@
 
 const db = require('./database');
 
-const TEST_CHANNEL_ID = 'C07JH0R8754';
+// Use environment variable or fallback to main SMS channel
+const TEST_CHANNEL_ID = process.env.SLACK_SCAN_CHANNEL_ID || process.env.SLACK_CHANNEL_ID;
 const SLOT_DURATION_MS = 3 * 60 * 1000; // 3 minutes per slot
 const TOTAL_SLOTS = 8; // Slots 01 through 08
 const PORTS_PER_BANK = 64;
