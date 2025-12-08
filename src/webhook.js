@@ -32,6 +32,44 @@ function isShortCode(phone) {
 
 const router = express.Router();
 
+// Message deduplication cache
+// Key: hash of sender+recipient+content, Value: timestamp
+const recentMessages = new Map();
+const DEDUP_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Generate a hash key for deduplication
+ */
+function getMessageKey(sender, recipient, content) {
+  // Use first 100 chars of content to create key
+  const contentKey = (content || '').substring(0, 100).toLowerCase().trim();
+  return `${sender}|${recipient}|${contentKey}`;
+}
+
+/**
+ * Check if message is a duplicate (seen in last 5 minutes)
+ * Returns true if duplicate, false if new
+ */
+function isDuplicateMessage(sender, recipient, content) {
+  const key = getMessageKey(sender, recipient, content);
+  const now = Date.now();
+
+  // Clean up old entries
+  for (const [k, timestamp] of recentMessages) {
+    if (now - timestamp > DEDUP_WINDOW_MS) {
+      recentMessages.delete(k);
+    }
+  }
+
+  if (recentMessages.has(key)) {
+    console.log(`[DEDUP] Duplicate message blocked: ${sender} -> ${recipient}`);
+    return true;
+  }
+
+  recentMessages.set(key, now);
+  return false;
+}
+
 /**
  * Parse Ejoin SIM bank body format
  * Returns { content, slot }
@@ -173,6 +211,11 @@ router.post('/sms', async (req, res) => {
     // Track the active slot for this bank-channel
     if (slot) {
       updateLastKnownSlot(bank, slot);
+    }
+
+    // Check for duplicate messages (same sender+recipient+content within 5 min)
+    if (isDuplicateMessage(senderPhone, recipientPhone, content)) {
+      return res.status(200).json({ status: 'duplicate_filtered' });
     }
 
     // Handle delivery reports
