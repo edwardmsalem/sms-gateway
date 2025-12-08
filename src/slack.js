@@ -1095,6 +1095,55 @@ app.command('/slot-scan', async ({ command, ack, respond }) => {
 });
 
 /**
+ * Message listener for "scan" command (works in DMs and channels)
+ * Usage: scan
+ * Triggers slot scan
+ */
+app.message(/^scan$/i, async ({ message, say }) => {
+  // Ignore bot messages
+  if (message.bot_id || message.subtype === 'bot_message') {
+    return;
+  }
+
+  // Check if a scan is already running
+  if (slotScan.getActiveScan()) {
+    await say({
+      text: '⚠️ A slot scan is already in progress. Please wait for it to complete (~24 min).',
+      thread_ts: message.ts
+    });
+    return;
+  }
+
+  // Check if sweep test is running
+  if (sweepTest.getActiveTest()) {
+    await say({
+      text: '⚠️ A sweep test is in progress. Please wait for it to complete.',
+      thread_ts: message.ts
+    });
+    return;
+  }
+
+  console.log(`[SCAN] Triggered by user ${message.user} via message`);
+
+  await say({
+    text: '🔄 Starting slot scan... This will take ~24 minutes (8 slots × 3 min each)',
+    thread_ts: message.ts
+  });
+
+  // Run the scan asynchronously
+  setImmediate(() => {
+    slotScan.runSlotScan(app).catch(error => {
+      console.error('[SCAN] Failed:', error.message);
+      app.client.chat.postMessage({
+        channel: message.channel,
+        thread_ts: message.ts,
+        text: `:x: Slot scan failed: ${error.message}`
+      }).catch(e => console.error('[SCAN] Failed to post error:', e.message));
+    });
+  });
+});
+
+/**
  * Message listener for "tm" command (without @Salem AI mention)
  * Usage: tm email@example.com
  * Triggers Ticketmaster code watch workflow
