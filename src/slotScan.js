@@ -10,6 +10,7 @@ const TEST_CHANNEL_ID = 'C07JH0R8754';
 const SLOT_DURATION_MS = 3 * 60 * 1000; // 3 minutes per slot
 const TOTAL_SLOTS = 8; // Slots 01 through 08
 const PORTS_PER_BANK = 64;
+const VERIFICATION_DELAY_MS = 5000; // Wait 5 seconds before verifying
 
 // Active scan state
 let activeScan = null;
@@ -94,6 +95,67 @@ async function switchBankToSlot(bank, slotPosition) {
 }
 
 /**
+ * Verify slot activation by checking status API
+ * Returns count of ports with expected slot active
+ * @param {object} bank - Bank config
+ * @param {number} slotPosition - Expected slot position (1-8)
+ */
+async function verifySlotActivation(bank, slotPosition) {
+  const slotStr = String(slotPosition).padStart(2, '0');
+
+  try {
+    const url = `http://${bank.ip_address}:${bank.port}/goip_get_status.html?username=${encodeURIComponent(bank.username)}&password=${encodeURIComponent(bank.password)}&all_slots=1`;
+
+    const response = await fetch(url, {
+      method: 'GET',
+      signal: AbortSignal.timeout(30000)
+    });
+
+    if (!response.ok) {
+      return { error: `HTTP ${response.status}`, activeCount: 0, totalPorts: 0 };
+    }
+
+    const data = await response.json();
+    const statusArray = data.status || data;
+
+    if (!Array.isArray(statusArray)) {
+      return { error: 'Invalid response format', activeCount: 0, totalPorts: 0 };
+    }
+
+    // Count ports where active=1 and slot matches expected position
+    let activeCount = 0;
+    let correctSlotCount = 0;
+    const portDetails = [];
+
+    for (const slot of statusArray) {
+      const port = String(slot.port || '');
+      const isActive = slot.active === 1 || slot.active === '1';
+
+      // Check if this port's slot matches expected (e.g., "35.04" should have .04 for slot 4)
+      const slotSuffix = port.split('.')[1];
+      const isCorrectSlot = slotSuffix === slotStr;
+
+      if (isActive) activeCount++;
+      if (isActive && isCorrectSlot) correctSlotCount++;
+
+      // Sample some ports for logging
+      if (portDetails.length < 5 && isActive) {
+        portDetails.push(`${port}(st=${slot.st})`);
+      }
+    }
+
+    return {
+      activeCount,
+      correctSlotCount,
+      totalPorts: statusArray.length,
+      samplePorts: portDetails
+    };
+  } catch (err) {
+    return { error: err.message, activeCount: 0, totalPorts: 0 };
+  }
+}
+
+/**
  * Run the slot scan across all banks
  * @param {object} slackApp - Slack Bolt app instance
  */
@@ -156,11 +218,46 @@ async function runSlotScan(slackApp) {
       const totalSuccess = bankResults.reduce((sum, r) => sum + r.success, 0);
       const totalFailed = bankResults.reduce((sum, r) => sum + r.failed, 0);
 
-      // Update with switch results
+      // Wait a few seconds then verify activation
+      await new Promise(r => setTimeout(r, VERIFICATION_DELAY_MS));
+
+      // Verify slots are actually active
+      const verificationResults = [];
+      let totalActive = 0;
+      let totalCorrectSlot = 0;
+
+      for (const bank of banks) {
+        const verify = await verifySlotActivation(bank, slotPos);
+        verificationResults.push({
+          bankId: bank.bank_id,
+          ...verify
+        });
+        if (!verify.error) {
+          totalActive += verify.activeCount;
+          totalCorrectSlot += verify.correctSlotCount;
+        }
+        console.log(`[SLOT SCAN] Bank ${bank.bank_id} verification: ${verify.correctSlotCount}/${verify.activeCount} active on slot ${slotStr}${verify.error ? ` (error: ${verify.error})` : ''}`);
+      }
+
+      // Build verification status
+      let verifyStatus = '';
+      for (const v of verificationResults) {
+        if (v.error) {
+          verifyStatus += `\n• Bank ${v.bankId}: ⚠️ ${v.error}`;
+        } else {
+          const icon = v.correctSlotCount > 0 ? '✅' : '⚠️';
+          verifyStatus += `\n• Bank ${v.bankId}: ${icon} ${v.correctSlotCount} ports on .${slotStr}, ${v.activeCount} total active`;
+          if (v.samplePorts.length > 0) {
+            verifyStatus += ` (${v.samplePorts.join(', ')})`;
+          }
+        }
+      }
+
+      // Update with switch + verification results
       await slackApp.client.chat.postMessage({
         channel: TEST_CHANNEL_ID,
         thread_ts: startMsg.ts,
-        text: `✅ *Slot ${slotStr}* switched (${switchTime}s)\nCommands: ${totalSuccess} success, ${totalFailed} failed\n⏳ Waiting 3 minutes...`
+        text: `✅ *Slot ${slotStr}* switched (${switchTime}s)\nCommands: ${totalSuccess} success, ${totalFailed} failed\n\n*Verification:*${verifyStatus}\n\n⏳ Waiting 3 minutes...`
       });
 
       // Wait for the slot duration

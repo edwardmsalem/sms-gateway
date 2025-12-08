@@ -533,6 +533,7 @@ function formatSlotStatusForSlack(status) {
  * @Salem AI mention handler
  * Commands:
  * - @Salem AI tm <email> - Watch for Ticketmaster codes (SMS + Email)
+ * - @Salem AI scan - Run slot scan (cycles through slots 01-08)
  * - @Salem AI reply <bank> <slot> <message> - Send SMS reply (in thread)
  * - @Salem AI status <bank> <slot> - Check SIM slot status
  */
@@ -605,6 +606,47 @@ app.event('app_mention', async ({ event, say }) => {
           }).catch(e => console.error('[TMCODE] Failed to post error:', e.message));
         });
     });
+    return;
+  }
+
+  // Check if this is a slot scan command: @Salem AI scan or @Salem AI slot scan
+  if (parts[0]?.toLowerCase() === 'scan' || (parts[0]?.toLowerCase() === 'slot' && parts[1]?.toLowerCase() === 'scan')) {
+    // Check if a scan is already running
+    if (slotScan.getActiveScan()) {
+      await say({
+        text: '⚠️ A slot scan is already in progress. Please wait for it to complete (~24 min).',
+        thread_ts: event.thread_ts || event.ts
+      });
+      return;
+    }
+
+    // Check if sweep test is running
+    if (sweepTest.getActiveTest()) {
+      await say({
+        text: '⚠️ A sweep test is in progress. Please wait for it to complete.',
+        thread_ts: event.thread_ts || event.ts
+      });
+      return;
+    }
+
+    await say({
+      text: '🔄 Starting slot scan... This will take ~24 minutes (8 slots × 3 min each)',
+      thread_ts: event.thread_ts || event.ts
+    });
+
+    // Run the scan asynchronously
+    setImmediate(() => {
+      slotScan.runSlotScan(app).catch(error => {
+        console.error('[SLOT SCAN] Failed:', error.message);
+        app.client.chat.postMessage({
+          channel: event.channel,
+          thread_ts: event.ts,
+          text: `:x: Slot scan failed: ${error.message}`
+        }).catch(e => console.error('[SLOT SCAN] Failed to post error:', e.message));
+      });
+    });
+
+    await addReaction(event.channel, event.ts, 'white_check_mark');
     return;
   }
 
@@ -754,7 +796,7 @@ app.event('app_mention', async ({ event, say }) => {
 
   // Default: show help message for unrecognized commands
   await say({
-    text: `*@Salem AI Commands:*\n• \`@Salem AI tm <email>\` - Watch for Ticketmaster codes\n• \`@Salem AI reply <bank> <slot> <message>\` - Send SMS reply (in thread)\n• \`@Salem AI status <bank> <slot>\` - Check SIM slot status`,
+    text: `*@Salem AI Commands:*\n• \`@Salem AI tm <email>\` - Watch for Ticketmaster codes\n• \`@Salem AI scan\` - Run slot scan (cycles slots 01-08)\n• \`@Salem AI reply <bank> <slot> <message>\` - Send SMS reply (in thread)\n• \`@Salem AI status <bank> <slot>\` - Check SIM slot status`,
     thread_ts: event.thread_ts || event.ts
   });
 });
