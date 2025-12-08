@@ -374,9 +374,12 @@ async function searchAssociateByEmail(email) {
       }
     }
 
-    // Debug: log associates that have emails
-    if (itemEmail && itemEmail.toLowerCase().includes(normalizedEmail.split('@')[0])) {
-      console.log(`[MONDAY] Potential match: ${item.name}, email=${itemEmail}, phone=${phone}`);
+    // Debug: log if email matches but phone is missing
+    if (itemEmail && itemEmail.toLowerCase().trim() === normalizedEmail) {
+      console.log(`[MONDAY] Email match found: ${item.name}, email=${itemEmail}, phone=${phone || 'MISSING'}`);
+      if (!phone) {
+        console.log(`[MONDAY] ⚠️ Email matches but ss_mobile is empty - cannot proceed without phone`);
+      }
     }
 
     if (itemEmail && itemEmail.toLowerCase().trim() === normalizedEmail && phone) {
