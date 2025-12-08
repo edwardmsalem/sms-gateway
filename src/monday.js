@@ -32,52 +32,82 @@ async function mondayQuery(query, variables = {}) {
 }
 
 async function buildAssociateMap() {
-  const query = `
-    query ($boardId: [ID!]!) {
-      boards(ids: $boardId) {
-        items_page(limit: 500) {
-          items {
-            id
-            name
-            column_values {
+  const associateMap = {};
+  let cursor = null;
+  let totalItems = 0;
+
+  do {
+    const query = cursor ? `
+      query ($boardId: [ID!]!, $cursor: String!) {
+        boards(ids: $boardId) {
+          items_page(limit: 500, cursor: $cursor) {
+            cursor
+            items {
               id
-              text
-              value
+              name
+              column_values {
+                id
+                text
+                value
+              }
             }
           }
         }
       }
-    }
-  `;
-
-  const result = await mondayQuery(query, { boardId: [ASSOCIATES_BOARD_ID] });
-  const items = result.boards[0]?.items_page?.items || [];
-
-  const associateMap = {};
-
-  for (const item of items) {
-    let phone = null;
-    let closer = null;
-
-    for (const col of item.column_values) {
-      if (col.id === 'ss_mobile' && col.text && col.text !== 'null' && col.text.length >= 10) {
-        phone = col.text;
+    ` : `
+      query ($boardId: [ID!]!) {
+        boards(ids: $boardId) {
+          items_page(limit: 500) {
+            cursor
+            items {
+              id
+              name
+              column_values {
+                id
+                text
+                value
+              }
+            }
+          }
+        }
       }
-      if (col.id === 'lead_closer' && col.text && col.text !== 'null') {
-        closer = col.text;
+    `;
+
+    const variables = cursor
+      ? { boardId: [ASSOCIATES_BOARD_ID], cursor }
+      : { boardId: [ASSOCIATES_BOARD_ID] };
+
+    const result = await mondayQuery(query, variables);
+    const itemsPage = result.boards[0]?.items_page;
+    const items = itemsPage?.items || [];
+    cursor = itemsPage?.cursor;
+    totalItems += items.length;
+
+    for (const item of items) {
+      let phone = null;
+      let closer = null;
+
+      for (const col of item.column_values) {
+        if (col.id === 'ss_mobile' && col.text && col.text !== 'null' && col.text.length >= 10) {
+          phone = col.text;
+        }
+        if (col.id === 'lead_closer' && col.text && col.text !== 'null') {
+          closer = col.text;
+        }
+      }
+
+      if (phone) {
+        const normalizedPhone = phone.replace(/\D/g, '');
+        associateMap[item.id] = {
+          name: item.name,
+          phone: normalizedPhone,
+          closer: closer
+        };
       }
     }
+  } while (cursor);
 
-    if (phone) {
-      const normalizedPhone = phone.replace(/\D/g, '');
-      associateMap[item.id] = {
-        name: item.name,
-        phone: normalizedPhone,
-        closer: closer
-      };
-    }
-  }
-
+  console.log(`[MONDAY] Built associate map with ${Object.keys(associateMap).length} entries (${totalItems} total)`);
   return associateMap;
 }
 
@@ -92,69 +122,99 @@ async function lookupDealsByPhone(phoneNumber) {
 
   const associateMap = await buildAssociateMap();
 
-  const query = `
-    query ($boardId: [ID!]!) {
-      boards(ids: $boardId) {
-        items_page(limit: 500) {
-          items {
-            id
-            name
-            column_values {
+  const matchingDeals = [];
+  let cursor = null;
+  let totalDeals = 0;
+
+  do {
+    const query = cursor ? `
+      query ($boardId: [ID!]!, $cursor: String!) {
+        boards(ids: $boardId) {
+          items_page(limit: 500, cursor: $cursor) {
+            cursor
+            items {
               id
-              text
-              value
+              name
+              column_values {
+                id
+                text
+                value
+              }
             }
           }
         }
       }
+    ` : `
+      query ($boardId: [ID!]!) {
+        boards(ids: $boardId) {
+          items_page(limit: 500) {
+            cursor
+            items {
+              id
+              name
+              column_values {
+                id
+                text
+                value
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    const variables = cursor
+      ? { boardId: [DEALS_BOARD_ID], cursor }
+      : { boardId: [DEALS_BOARD_ID] };
+
+    const result = await mondayQuery(query, variables);
+    const itemsPage = result.boards[0]?.items_page;
+    const items = itemsPage?.items || [];
+    cursor = itemsPage?.cursor;
+    totalDeals += items.length;
+
+    for (const item of items) {
+      const statusCol = item.column_values.find(cv => cv.id === 'lead_status__1');
+      const dealStatus = statusCol?.text || '';
+      if (IGNORED_STATUSES.includes(dealStatus)) continue;
+
+      const dealContactCol = item.column_values.find(cv => cv.id === 'deal_contact');
+      let associateId = null;
+      if (dealContactCol?.value) {
+        try {
+          const parsed = JSON.parse(dealContactCol.value);
+          associateId = parsed.linkedPulseIds?.[0]?.linkedPulseId;
+        } catch (e) {}
+      }
+
+      const associateInfo = associateId ? associateMap[associateId] : null;
+      if (!associateInfo?.phone) continue;
+
+      const assocPhone = associateInfo.phone;
+      const assocPhoneShort = assocPhone.startsWith('1') ? assocPhone.substring(1) : assocPhone;
+      const assocPhoneLong = assocPhone.startsWith('1') ? assocPhone : '1' + assocPhone;
+
+      if (!phoneVariants.includes(assocPhone) &&
+          !phoneVariants.includes(assocPhoneShort) &&
+          !phoneVariants.includes(assocPhoneLong)) {
+        continue;
+      }
+
+      const teamCol = item.column_values.find(cv => cv.id === 'main_team');
+      const team = teamCol?.text || item.name.split(' - ')[1] || '';
+
+      matchingDeals.push({
+        id: item.id,
+        name: item.name,
+        associateName: associateInfo.name || item.name.split(' - ')[0],
+        closer: associateInfo.closer,
+        team: team,
+        status: dealStatus
+      });
     }
-  `;
+  } while (cursor);
 
-  const result = await mondayQuery(query, { boardId: [DEALS_BOARD_ID] });
-  const items = result.boards[0]?.items_page?.items || [];
-
-  const matchingDeals = [];
-
-  for (const item of items) {
-    const statusCol = item.column_values.find(cv => cv.id === 'lead_status__1');
-    const dealStatus = statusCol?.text || '';
-    if (IGNORED_STATUSES.includes(dealStatus)) continue;
-
-    const dealContactCol = item.column_values.find(cv => cv.id === 'deal_contact');
-    let associateId = null;
-    if (dealContactCol?.value) {
-      try {
-        const parsed = JSON.parse(dealContactCol.value);
-        associateId = parsed.linkedPulseIds?.[0]?.linkedPulseId;
-      } catch (e) {}
-    }
-
-    const associateInfo = associateId ? associateMap[associateId] : null;
-    if (!associateInfo?.phone) continue;
-
-    const assocPhone = associateInfo.phone;
-    const assocPhoneShort = assocPhone.startsWith('1') ? assocPhone.substring(1) : assocPhone;
-    const assocPhoneLong = assocPhone.startsWith('1') ? assocPhone : '1' + assocPhone;
-
-    if (!phoneVariants.includes(assocPhone) &&
-        !phoneVariants.includes(assocPhoneShort) &&
-        !phoneVariants.includes(assocPhoneLong)) {
-      continue;
-    }
-
-    const teamCol = item.column_values.find(cv => cv.id === 'main_team');
-    const team = teamCol?.text || item.name.split(' - ')[1] || '';
-
-    matchingDeals.push({
-      id: item.id,
-      name: item.name,
-      associateName: associateInfo.name || item.name.split(' - ')[0],
-      closer: associateInfo.closer,
-      team: team,
-      status: dealStatus
-    });
-  }
-
+  console.log(`[MONDAY] Searched ${totalDeals} deals, found ${matchingDeals.length} matches`);
   return matchingDeals;
 }
 
