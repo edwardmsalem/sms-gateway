@@ -4,6 +4,7 @@ const simbank = require('./simbank');
 const { formatPhoneDisplay, parsePhoneFromCommand, formatTime } = require('./utils');
 const { trackOutboundSms } = require('./deliveryTracker');
 const sweepTest = require('./sweepTest');
+const slotScan = require('./slotScan');
 const ticketmasterWatch = require('./ticketmasterWatch');
 
 const CHANNEL_ID = process.env.SLACK_CHANNEL_ID;
@@ -1002,6 +1003,50 @@ app.command('/sweep-test', async ({ command, ack, respond }) => {
       app.client.chat.postMessage({
         channel: sweepTest.TEST_CHANNEL_ID,
         text: `:x: Sweep test failed: ${error.message}`
+      }).catch(e => console.error('Failed to post error message:', e.message));
+    });
+  });
+});
+
+/**
+ * /slot-scan command handler
+ * Cycles through all 8 slot positions across all SIM banks
+ * Each slot stays active for 3 minutes
+ * Usage: /slot-scan
+ */
+app.command('/slot-scan', async ({ command, ack, respond }) => {
+  await ack();
+
+  // Check if a scan is already running
+  if (slotScan.getActiveScan()) {
+    respond({
+      response_type: 'ephemeral',
+      text: 'A slot scan is already in progress. Please wait for it to complete (~24 min).'
+    });
+    return;
+  }
+
+  // Check if sweep test is running
+  if (sweepTest.getActiveTest()) {
+    respond({
+      response_type: 'ephemeral',
+      text: 'A sweep test is in progress. Please wait for it to complete.'
+    });
+    return;
+  }
+
+  respond({
+    response_type: 'ephemeral',
+    text: `🔄 Slot scan starting... This will take ~24 minutes (8 slots × 3 min each)`
+  });
+
+  // Run the scan asynchronously
+  setImmediate(() => {
+    slotScan.runSlotScan(app).catch(error => {
+      console.error('Slot scan failed:', error.message);
+      app.client.chat.postMessage({
+        channel: slotScan.TEST_CHANNEL_ID,
+        text: `:x: Slot scan failed: ${error.message}`
       }).catch(e => console.error('Failed to post error message:', e.message));
     });
   });
