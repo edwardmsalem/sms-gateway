@@ -322,6 +322,7 @@ function doesAreaCodeMatchTeam(areaCode, teamName) {
 
 /**
  * Search Associates board by email to find SS mobile number
+ * Uses Monday's server-side filtering for speed
  * @param {string} email - Email to search for
  * @returns {Promise<{name: string, phone: string, email: string}|null>}
  */
@@ -330,6 +331,79 @@ async function searchAssociateByEmail(email) {
 
   console.log(`[MONDAY] Searching for email: ${normalizedEmail}`);
 
+  // Use items_page_by_column_values for server-side filtering (much faster)
+  const query = `
+    query ($boardId: ID!, $columnId: String!, $columnValue: String!) {
+      items_page_by_column_values(
+        board_id: $boardId,
+        columns: [{ column_id: $columnId, column_values: [$columnValue] }],
+        limit: 10
+      ) {
+        items {
+          id
+          name
+          column_values {
+            id
+            text
+          }
+        }
+      }
+    }
+  `;
+
+  try {
+    const result = await mondayQuery(query, {
+      boardId: ASSOCIATES_BOARD_ID,
+      columnId: 'ss_email',
+      columnValue: normalizedEmail
+    });
+
+    const items = result.items_page_by_column_values?.items || [];
+    console.log(`[MONDAY] Server-side search found ${items.length} matches`);
+
+    for (const item of items) {
+      let phone = null;
+      let itemEmail = null;
+
+      for (const col of item.column_values) {
+        if (col.id === 'ss_mobile' && col.text && col.text !== 'null' && col.text.length >= 10) {
+          phone = col.text;
+        }
+        if (col.id === 'ss_email' && col.text && col.text !== 'null') {
+          itemEmail = col.text;
+        }
+      }
+
+      // Verify exact match (case-insensitive)
+      if (itemEmail && itemEmail.toLowerCase().trim() === normalizedEmail) {
+        if (phone) {
+          console.log(`[MONDAY] Found match: ${item.name}, phone=${phone}`);
+          return {
+            name: item.name,
+            phone: phone.replace(/\D/g, ''),
+            email: itemEmail
+          };
+        } else {
+          console.log(`[MONDAY] ⚠️ Email matches but ss_mobile is empty for ${item.name}`);
+        }
+      }
+    }
+
+    console.log(`[MONDAY] No match found for ${normalizedEmail}`);
+    return null;
+
+  } catch (err) {
+    // Fallback to pagination if server-side filter fails
+    console.log(`[MONDAY] Server-side search failed, falling back to pagination: ${err.message}`);
+    return searchAssociateByEmailPaginated(email);
+  }
+}
+
+/**
+ * Fallback: Search using pagination (slower but more reliable)
+ */
+async function searchAssociateByEmailPaginated(email) {
+  const normalizedEmail = email.toLowerCase().trim();
   let cursor = null;
   let totalItems = 0;
   let pageNum = 0;
@@ -347,7 +421,6 @@ async function searchAssociateByEmail(email) {
               column_values {
                 id
                 text
-                value
               }
             }
           }
@@ -364,7 +437,6 @@ async function searchAssociateByEmail(email) {
               column_values {
                 id
                 text
-                value
               }
             }
           }
@@ -384,32 +456,16 @@ async function searchAssociateByEmail(email) {
 
     console.log(`[MONDAY] Page ${pageNum}: ${items.length} associates (total: ${totalItems})`);
 
-    // Log column IDs from first item on first page
-    if (pageNum === 1 && items.length > 0) {
-      const colIds = items[0].column_values.map(c => c.id);
-      console.log(`[MONDAY] Column IDs: ${colIds.join(', ')}`);
-    }
-
     for (const item of items) {
       let phone = null;
       let itemEmail = null;
 
       for (const col of item.column_values) {
-        // Use ss_mobile for phone (ss_phone is mirrored/blank)
         if (col.id === 'ss_mobile' && col.text && col.text !== 'null' && col.text.length >= 10) {
           phone = col.text;
         }
-        // Use ss_email for email
         if (col.id === 'ss_email' && col.text && col.text !== 'null' && col.text.includes('@')) {
           itemEmail = col.text;
-        }
-      }
-
-      // Debug: log if email matches but phone is missing
-      if (itemEmail && itemEmail.toLowerCase().trim() === normalizedEmail) {
-        console.log(`[MONDAY] Email match found: ${item.name}, email=${itemEmail}, phone=${phone || 'MISSING'}`);
-        if (!phone) {
-          console.log(`[MONDAY] ⚠️ Email matches but ss_mobile is empty - cannot proceed without phone`);
         }
       }
 
