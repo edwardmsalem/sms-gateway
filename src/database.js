@@ -81,6 +81,16 @@ async function initialize() {
   db.run(`CREATE INDEX IF NOT EXISTS idx_blocked_numbers_phone ON blocked_numbers(phone_number)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id)`);
 
+  // Ticketmaster purchase email tracking
+  db.run(`
+    CREATE TABLE IF NOT EXISTS processed_tm_emails (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email_id TEXT UNIQUE NOT NULL,
+      processed_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_processed_tm_emails ON processed_tm_emails(email_id)`);
+
   save();
   console.log('Database initialized');
 }
@@ -253,6 +263,11 @@ function getStats() {
 module.exports = {
   initialize,
   save,
+
+  // Low-level (for modules that need direct access)
+  getOne,
+  getAll,
+  run,
 
   // SIM Banks
   upsertSimBank,

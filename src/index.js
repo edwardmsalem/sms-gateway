@@ -9,6 +9,7 @@ const { app: slackApp, receiver: slackReceiver } = require('./slack');
 const slotScan = require('./slotScan');
 const { loadSimBanksFromEnv, formatDateTime } = require('./utils');
 const maxsip = require('./maxsip');
+const tmPurchases = require('./ticketmasterPurchases');
 
 const PORT = process.env.PORT || 3000;
 
@@ -118,6 +119,10 @@ async function main() {
     }, { timezone: 'America/New_York' });
 
     console.log('[CRON] Slot scan scheduled: 9 AM, 4:30 PM, 9 PM EST daily');
+    // Initialize Ticketmaster purchase scraper (if configured)
+    if (process.env.TM_GMAIL_REFRESH_TOKEN && process.env.TM_PURCHASES_BOARD_ID) {
+      tmPurchases.startScheduler(60 * 60 * 1000); // Run every hour
+    }
   });
 
   // Graceful shutdown
