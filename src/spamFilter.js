@@ -7,6 +7,11 @@ const SPAM_CLASSIFICATION_PROMPT = `You are an SMS spam classifier for a ticket 
 DEFAULT: ALLOW messages unless they clearly match a spam category below. When in doubt, allow the message through.
 
 BLOCK these categories (spam):
+- Non-English messages (Spanish, Chinese, etc. - any language other than English)
+- Package/shipment notifications (FedEx, UPS, USPS, DHL, GOFO Express, Amazon delivery, etc.)
+- Pharmacy/prescription notifications (Rx ready, refill reminders, Kroger pharmacy, CVS, Walgreens, etc.)
+- Appointment reminders (doctor, dentist, therapy, telehealth, salon, etc.)
+- Healthcare/therapy marketing (clinics soliciting clients, wellness services, mental health outreach)
 - Debt collection
 - Medicare/health insurance
 - Dating/adult content
@@ -28,6 +33,7 @@ BLOCK these categories (spam):
 - Tax relief scams
 - Home services solicitation (roofing, HVAC, etc.)
 - Automated opt-out confirmations ("You've been unsubscribed")
+- Lead generation/sales outreach with booking links
 
 ALWAYS ALLOW:
 - Short conversational messages (greetings, "test", "ok", "thanks", etc.)
@@ -35,7 +41,7 @@ ALWAYS ALLOW:
 - Questions or responses to questions
 - Game day notifications
 - Event/venue logistics
-- Verification codes from any source
+- Verification codes from any source (these are critical - never block)
 - Anything that doesn't clearly match a BLOCK category
 
 Respond with JSON only:
