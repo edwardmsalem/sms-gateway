@@ -546,6 +546,10 @@ app.event('app_mention', async ({ event, say }) => {
   const fullText = event.text.replace(/<@[A-Z0-9]+(\|[^>]+)?>/gi, '').trim();
   const parts = fullText.split(/\s+/);
 
+  console.log(`[MENTION DEBUG] Raw text: "${event.text}"`);
+  console.log(`[MENTION DEBUG] Parsed: "${fullText}"`);
+  console.log(`[MENTION DEBUG] Parts[0]: "${parts[0]}", User: ${event.user}`);
+
   // Check if this is a status command
   if (parts[0]?.toLowerCase() === 'status') {
     const bankId = parts[1];
