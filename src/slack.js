@@ -1053,7 +1053,7 @@ app.command('/sweep-test', async ({ command, ack, respond }) => {
 
 /**
  * /cleanup-duplicates command handler
- * Scans channel for duplicate messages and deletes all but the first occurrence
+ * Scans channel AND threads for duplicate messages and deletes all but the first occurrence
  * Usage: /cleanup-duplicates [hours] (default: 24 hours)
  */
 app.command('/cleanup-duplicates', async ({ command, ack, respond }) => {
@@ -1064,7 +1064,7 @@ app.command('/cleanup-duplicates', async ({ command, ack, respond }) => {
 
   respond({
     response_type: 'ephemeral',
-    text: `🧹 Scanning last ${hours} hours for duplicates in this channel...`
+    text: `🧹 Scanning last ${hours} hours for duplicates (including threads)...`
   });
 
   setImmediate(async () => {
@@ -1074,7 +1074,7 @@ app.command('/cleanup-duplicates', async ({ command, ack, respond }) => {
       let allMessages = [];
       let cursor;
 
-      // Paginate through all messages
+      // Paginate through all top-level messages
       do {
         const result = await app.client.conversations.history({
           channel: channelId,
@@ -1086,6 +1086,29 @@ app.command('/cleanup-duplicates', async ({ command, ack, respond }) => {
         allMessages = allMessages.concat(result.messages || []);
         cursor = result.response_metadata?.next_cursor;
       } while (cursor);
+
+      // Also fetch thread replies for messages that have them
+      const threadsToFetch = allMessages.filter(m => m.reply_count > 0);
+
+      for (const parentMsg of threadsToFetch) {
+        try {
+          const replies = await app.client.conversations.replies({
+            channel: channelId,
+            ts: parentMsg.ts,
+            oldest: oldestTs,
+            limit: 200
+          });
+
+          // Add replies (skip the parent message which is included in replies)
+          const threadReplies = (replies.messages || []).filter(m => m.ts !== parentMsg.ts);
+          allMessages = allMessages.concat(threadReplies);
+        } catch (err) {
+          console.warn(`[CLEANUP] Failed to fetch thread ${parentMsg.ts}: ${err.message}`);
+        }
+
+        // Rate limit thread fetches
+        await new Promise(r => setTimeout(r, 200));
+      }
 
       // Filter to only bot messages with SMS content
       const botMessages = allMessages.filter(m =>
@@ -1110,7 +1133,7 @@ app.command('/cleanup-duplicates', async ({ command, ack, respond }) => {
       if (duplicates.length === 0) {
         await app.client.chat.postMessage({
           channel: channelId,
-          text: `✅ No duplicates found in the last ${hours} hours.`
+          text: `✅ No duplicates found in the last ${hours} hours (scanned ${allMessages.length} messages, ${threadsToFetch.length} threads).`
         });
         return;
       }
@@ -1139,7 +1162,7 @@ app.command('/cleanup-duplicates', async ({ command, ack, respond }) => {
 
       await app.client.chat.postMessage({
         channel: channelId,
-        text: `🧹 Cleanup complete!\n• Found: ${duplicates.length} duplicates\n• Deleted: ${deleted}\n• Failed: ${failed}`
+        text: `🧹 Cleanup complete!\n• Scanned: ${allMessages.length} messages (${threadsToFetch.length} threads)\n• Found: ${duplicates.length} duplicates\n• Deleted: ${deleted}\n• Failed: ${failed}`
       });
 
     } catch (error) {
