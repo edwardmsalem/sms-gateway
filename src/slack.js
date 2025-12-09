@@ -72,6 +72,7 @@ function isVerificationCode(content) {
   if (text.includes('seatgeek')) return true;
   if (text.includes('vivid seats')) return true;
   if (text.includes('axs')) return true;
+  if (text.includes('mlb')) return true;
 
   return false;
 }
@@ -544,6 +545,10 @@ app.event('app_mention', async ({ event, say }) => {
   // Parse the command text - handle both <@U123> and <@U123|username> formats
   const fullText = event.text.replace(/<@[A-Z0-9]+(\|[^>]+)?>/gi, '').trim();
   const parts = fullText.split(/\s+/);
+
+  console.log(`[MENTION DEBUG] Raw text: "${event.text}"`);
+  console.log(`[MENTION DEBUG] Parsed: "${fullText}"`);
+  console.log(`[MENTION DEBUG] Parts[0]: "${parts[0]}", User: ${event.user}`);
 
   // Check if this is a status command
   if (parts[0]?.toLowerCase() === 'status') {
