@@ -1114,27 +1114,37 @@ app.command('/cleanup-duplicates', async ({ command, ack, respond }) => {
       const botMessages = allMessages.filter(m => m.bot_id && m.text);
 
       // Extract the core content for comparison
-      // Strips out variable metadata (bank IDs, slots, timestamps) to find true duplicates
+      // Handles two message formats:
+      // 1. Enriched: "content" with quotes
+      // 2. Non-enriched: 💬 content without quotes
       function extractSmsKey(text) {
-        // Try multiple quote styles: straight ", curly "", and single '
-        const contentMatch = text.match(/"([^"]+)"/) ||
-                            text.match(/"([^"]+)"/) ||
-                            text.match(/'([^']+)'/);
-        const content = contentMatch ? contentMatch[1].trim() : '';
+        let content = '';
+
+        // Try quoted format first (enriched messages): "content"
+        const quotedMatch = text.match(/"([^"]+)"/);
+        if (quotedMatch) {
+          content = quotedMatch[1].trim();
+        } else {
+          // Try non-enriched format: 💬 content followed by ━ or newline
+          const emojiMatch = text.match(/💬\s*([^━\n]+)/);
+          if (emojiMatch) {
+            content = emojiMatch[1].trim();
+          }
+        }
 
         // Extract phone numbers from the text
         const phoneMatches = text.match(/\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g) || [];
         const phones = phoneMatches.map(p => p.replace(/\D/g, '')).slice(0, 2).sort().join('|');
 
-        if (content && content.length > 5) {
+        if (content && content.length > 3) {
           return `${phones}|${content}`;
         }
 
         // Fallback: normalize the text by removing variable parts
         return text
-          .replace(/\d+\.\d+/g, 'SLOT') // Slot numbers like 28.03
-          .replace(/5001[24]/g, 'BANK') // Bank IDs
-          .replace(/@SalemAI\s+reply\s+\S+\s+\S+/g, 'REPLY') // Reply instructions
+          .replace(/\d+\.\d+/g, 'SLOT')
+          .replace(/5001[24]/g, 'BANK')
+          .replace(/@Salem\s*AI\s+reply\s+\S+\s+\S+/gi, 'REPLY')
           .replace(/·/g, '|')
           .trim();
       }
