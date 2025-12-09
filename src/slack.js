@@ -1110,38 +1110,52 @@ app.command('/cleanup-duplicates', async ({ command, ack, respond }) => {
         await new Promise(r => setTimeout(r, 200));
       }
 
-      // Filter to only bot messages with SMS content
-      const botMessages = allMessages.filter(m =>
-        m.bot_id && m.text && (m.text.includes('New SMS') || m.text.includes('📥'))
-      );
+      // Filter to bot messages (more lenient - any bot message)
+      const botMessages = allMessages.filter(m => m.bot_id && m.text);
 
-      // Extract core SMS content for comparison (ignore metadata like bank/slot)
+      // Extract the core content for comparison
+      // Handles two message formats:
+      // 1. Enriched: "content" with quotes
+      // 2. Non-enriched: 💬 content without quotes
       function extractSmsKey(text) {
-        // Extract "From: (XXX) XXX-XXXX" phone
-        const fromMatch = text.match(/From:\s*\(?(\d{3})\)?\s*(\d{3})[- ]?(\d{4})/);
-        const fromPhone = fromMatch ? `${fromMatch[1]}${fromMatch[2]}${fromMatch[3]}` : '';
+        let content = '';
 
-        // Extract recipient phone from "New SMS to XXX" or header
-        const toMatch = text.match(/to\s+([^*\n]+)\*?\s*·\s*\(?(\d{3})\)?[- ]?(\d{3})[- ]?(\d{4})/) ||
-                       text.match(/to\s*\(?(\d{3})\)?[- ]?(\d{3})[- ]?(\d{4})/);
-        const toPhone = toMatch ? (toMatch[2] ? `${toMatch[2]}${toMatch[3]}${toMatch[4]}` : `${toMatch[1]}${toMatch[2]}${toMatch[3]}`) : '';
+        // Try quoted format first (enriched messages): "content"
+        const quotedMatch = text.match(/"([^"]+)"/);
+        if (quotedMatch) {
+          content = quotedMatch[1].trim();
+        } else {
+          // Try non-enriched format: 💬 content followed by ━ or newline
+          const emojiMatch = text.match(/💬\s*([^━\n]+)/);
+          if (emojiMatch) {
+            content = emojiMatch[1].trim();
+          }
+        }
 
-        // Extract quoted content - the actual SMS message
-        const contentMatch = text.match(/"([^"]+)"/);
-        const content = contentMatch ? contentMatch[1].trim() : '';
+        // Extract phone numbers from the text
+        const phoneMatches = text.match(/\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g) || [];
+        const phones = phoneMatches.map(p => p.replace(/\D/g, '')).slice(0, 2).sort().join('|');
 
-        return `${fromPhone}|${toPhone}|${content}`;
+        if (content && content.length > 3) {
+          return `${phones}|${content}`;
+        }
+
+        // Fallback: normalize the text by removing variable parts
+        return text
+          .replace(/\d+\.\d+/g, 'SLOT')
+          .replace(/5001[24]/g, 'BANK')
+          .replace(/@Salem\s*AI\s+reply\s+\S+\s+\S+/gi, 'REPLY')
+          .replace(/·/g, '|')
+          .trim();
       }
 
-      // Group by SMS content (not full message text)
-      const seen = new Map(); // key -> first message
+      // Group by SMS content
+      const seen = new Map();
       const duplicates = [];
 
       for (const msg of botMessages.sort((a, b) => parseFloat(a.ts) - parseFloat(b.ts))) {
         const smsKey = extractSmsKey(msg.text);
-
-        // Skip if we couldn't extract meaningful content
-        if (!smsKey || smsKey === '||') continue;
+        if (!smsKey || smsKey.length < 10) continue;
 
         const hash = crypto.createHash('md5').update(smsKey).digest('hex');
 
@@ -1155,7 +1169,7 @@ app.command('/cleanup-duplicates', async ({ command, ack, respond }) => {
       if (duplicates.length === 0) {
         await app.client.chat.postMessage({
           channel: channelId,
-          text: `✅ No duplicates found in the last ${hours} hours (scanned ${allMessages.length} messages, ${threadsToFetch.length} threads).`
+          text: `✅ No duplicates found in the last ${hours} hours.\n• Scanned: ${allMessages.length} messages (${threadsToFetch.length} threads)\n• Bot messages checked: ${botMessages.length}`
         });
         return;
       }
