@@ -13,7 +13,7 @@ const ticketmasterWatch = require('./ticketmasterWatch');
 // Message deduplication - track recently processed messages to prevent duplicates
 // Key: hash of sender+recipient+content, Value: timestamp
 const recentMessages = new Map();
-const DEDUPE_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
+const DEDUPE_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
 
 /**
  * Generate a deduplication key for a message
