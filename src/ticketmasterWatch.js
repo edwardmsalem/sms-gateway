@@ -473,8 +473,6 @@ async function startTextchestWatch(slackApp, email, slackChannel, threadTs) {
           getMessage('activationFailed'));
       }
     } else {
-      // Step 2: Try Monday.com for SS number
-      const associate = await monday.searchAssociateByEmail(email);
       // Step 2: Try Monday.com for SS number (Associates board)
       await postToThread(slackApp, slackChannel, threadTs,
         `Not in Textchest. Checking Monday.com...`);
@@ -502,9 +500,8 @@ async function startTextchestWatch(slackApp, email, slackChannel, threadTs) {
 
         if (slotInfo) {
           smsSource = 'ss';
-          watchKey = normalizePhone(associate.phone);
-          slotId = `${slotInfo.bankId}-${slotInfo.slot}`;
           watchKey = normalizePhone(foundRecord.phone);
+          slotId = `${slotInfo.bankId}-${slotInfo.slot}`;
 
           await postToThread(slackApp, slackChannel, threadTs,
             getMessage('foundNumber', phoneDisplay));
