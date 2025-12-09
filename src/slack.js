@@ -72,6 +72,7 @@ function isVerificationCode(content) {
   if (text.includes('seatgeek')) return true;
   if (text.includes('vivid seats')) return true;
   if (text.includes('axs')) return true;
+  if (text.includes('mlb')) return true;
 
   return false;
 }
