@@ -1115,13 +1115,35 @@ app.command('/cleanup-duplicates', async ({ command, ack, respond }) => {
         m.bot_id && m.text && (m.text.includes('New SMS') || m.text.includes('📥'))
       );
 
-      // Group by content hash
-      const seen = new Map(); // hash -> first message
+      // Extract core SMS content for comparison (ignore metadata like bank/slot)
+      function extractSmsKey(text) {
+        // Extract "From: (XXX) XXX-XXXX" phone
+        const fromMatch = text.match(/From:\s*\(?(\d{3})\)?\s*(\d{3})[- ]?(\d{4})/);
+        const fromPhone = fromMatch ? `${fromMatch[1]}${fromMatch[2]}${fromMatch[3]}` : '';
+
+        // Extract recipient phone from "New SMS to XXX" or header
+        const toMatch = text.match(/to\s+([^*\n]+)\*?\s*·\s*\(?(\d{3})\)?[- ]?(\d{3})[- ]?(\d{4})/) ||
+                       text.match(/to\s*\(?(\d{3})\)?[- ]?(\d{3})[- ]?(\d{4})/);
+        const toPhone = toMatch ? (toMatch[2] ? `${toMatch[2]}${toMatch[3]}${toMatch[4]}` : `${toMatch[1]}${toMatch[2]}${toMatch[3]}`) : '';
+
+        // Extract quoted content - the actual SMS message
+        const contentMatch = text.match(/"([^"]+)"/);
+        const content = contentMatch ? contentMatch[1].trim() : '';
+
+        return `${fromPhone}|${toPhone}|${content}`;
+      }
+
+      // Group by SMS content (not full message text)
+      const seen = new Map(); // key -> first message
       const duplicates = [];
 
       for (const msg of botMessages.sort((a, b) => parseFloat(a.ts) - parseFloat(b.ts))) {
-        // Extract sender, recipient, and content from the message
-        const hash = crypto.createHash('md5').update(msg.text).digest('hex');
+        const smsKey = extractSmsKey(msg.text);
+
+        // Skip if we couldn't extract meaningful content
+        if (!smsKey || smsKey === '||') continue;
+
+        const hash = crypto.createHash('md5').update(smsKey).digest('hex');
 
         if (seen.has(hash)) {
           duplicates.push(msg);
