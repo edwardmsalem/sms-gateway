@@ -1,4 +1,5 @@
 const { App, ExpressReceiver } = require('@slack/bolt');
+const crypto = require('crypto');
 const db = require('./database');
 const simbank = require('./simbank');
 const { formatPhoneDisplay, parsePhoneFromCommand, formatTime } = require('./utils');
@@ -1051,6 +1052,108 @@ app.command('/sweep-test', async ({ command, ack, respond }) => {
 });
 
 /**
+ * /cleanup-duplicates command handler
+ * Scans channel for duplicate messages and deletes all but the first occurrence
+ * Usage: /cleanup-duplicates [hours] (default: 24 hours)
+ */
+app.command('/cleanup-duplicates', async ({ command, ack, respond }) => {
+  await ack();
+
+  const hours = parseInt(command.text) || 24;
+  const channelId = command.channel_id;
+
+  respond({
+    response_type: 'ephemeral',
+    text: `🧹 Scanning last ${hours} hours for duplicates in this channel...`
+  });
+
+  setImmediate(async () => {
+    try {
+      // Get conversation history
+      const oldestTs = (Date.now() / 1000 - hours * 3600).toString();
+      let allMessages = [];
+      let cursor;
+
+      // Paginate through all messages
+      do {
+        const result = await app.client.conversations.history({
+          channel: channelId,
+          oldest: oldestTs,
+          limit: 200,
+          cursor
+        });
+
+        allMessages = allMessages.concat(result.messages || []);
+        cursor = result.response_metadata?.next_cursor;
+      } while (cursor);
+
+      // Filter to only bot messages with SMS content
+      const botMessages = allMessages.filter(m =>
+        m.bot_id && m.text && (m.text.includes('New SMS') || m.text.includes('📥'))
+      );
+
+      // Group by content hash
+      const seen = new Map(); // hash -> first message
+      const duplicates = [];
+
+      for (const msg of botMessages.sort((a, b) => parseFloat(a.ts) - parseFloat(b.ts))) {
+        // Extract sender, recipient, and content from the message
+        const hash = crypto.createHash('md5').update(msg.text).digest('hex');
+
+        if (seen.has(hash)) {
+          duplicates.push(msg);
+        } else {
+          seen.set(hash, msg);
+        }
+      }
+
+      if (duplicates.length === 0) {
+        await app.client.chat.postMessage({
+          channel: channelId,
+          text: `✅ No duplicates found in the last ${hours} hours.`
+        });
+        return;
+      }
+
+      // Delete duplicates
+      let deleted = 0;
+      let failed = 0;
+
+      for (const msg of duplicates) {
+        try {
+          await app.client.chat.delete({
+            channel: channelId,
+            ts: msg.ts
+          });
+          deleted++;
+        } catch (err) {
+          console.error(`[CLEANUP] Failed to delete ${msg.ts}: ${err.message}`);
+          failed++;
+        }
+
+        // Rate limit: Slack allows ~50 requests per minute
+        if (deleted % 40 === 0) {
+          await new Promise(r => setTimeout(r, 2000));
+        }
+      }
+
+      await app.client.chat.postMessage({
+        channel: channelId,
+        text: `🧹 Cleanup complete!\n• Found: ${duplicates.length} duplicates\n• Deleted: ${deleted}\n• Failed: ${failed}`
+      });
+
+    } catch (error) {
+      console.error('[CLEANUP] Error:', error.message);
+      await app.client.chat.postMessage({
+        channel: channelId,
+        text: `:x: Cleanup failed: ${error.message}`
+      });
+    }
+  });
+});
+
+/**
+ * Message listener for "tm" command (without @SalemAI mention)
  * /slot-scan command handler
  * Cycles through all 8 slot positions across all SIM banks
  * Each slot stays active for 3 minutes
