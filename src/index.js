@@ -2,11 +2,14 @@ require('dotenv').config();
 
 const express = require('express');
 const { createServer } = require('http');
+const cron = require('node-cron');
 const db = require('./database');
 const { router: webhookRouter } = require('./webhook');
 const { app: slackApp, receiver: slackReceiver } = require('./slack');
+const slotScan = require('./slotScan');
 const { loadSimBanksFromEnv, formatDateTime } = require('./utils');
 const maxsip = require('./maxsip');
+const tmPurchases = require('./ticketmasterPurchases');
 
 const PORT = process.env.PORT || 3000;
 
@@ -88,6 +91,37 @@ async function main() {
     const gmailInitialized = await maxsip.initGmail();
     if (gmailInitialized) {
       maxsip.startPolling(30000); // Poll every 30 seconds
+    }
+
+    // Schedule slot scans (EST timezone)
+    // 9 AM EST daily
+    cron.schedule('0 9 * * *', () => {
+      console.log('[CRON] Starting scheduled slot scan (9 AM EST)');
+      slotScan.runSlotScan(slackApp).catch(err => {
+        console.error('[CRON] Slot scan failed:', err.message);
+      });
+    }, { timezone: 'America/New_York' });
+
+    // 4:30 PM EST daily
+    cron.schedule('30 16 * * *', () => {
+      console.log('[CRON] Starting scheduled slot scan (4:30 PM EST)');
+      slotScan.runSlotScan(slackApp).catch(err => {
+        console.error('[CRON] Slot scan failed:', err.message);
+      });
+    }, { timezone: 'America/New_York' });
+
+    // 9 PM EST daily
+    cron.schedule('0 21 * * *', () => {
+      console.log('[CRON] Starting scheduled slot scan (9 PM EST)');
+      slotScan.runSlotScan(slackApp).catch(err => {
+        console.error('[CRON] Slot scan failed:', err.message);
+      });
+    }, { timezone: 'America/New_York' });
+
+    console.log('[CRON] Slot scan scheduled: 9 AM, 4:30 PM, 9 PM EST daily');
+    // Initialize Ticketmaster purchase scraper (if configured)
+    if (process.env.TM_GMAIL_REFRESH_TOKEN && process.env.TM_PURCHASES_BOARD_ID) {
+      tmPurchases.startScheduler(60 * 60 * 1000); // Run every hour
     }
   });
 

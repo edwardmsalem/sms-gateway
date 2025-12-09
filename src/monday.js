@@ -1,6 +1,8 @@
 const MONDAY_API_URL = 'https://api.monday.com/v2';
 const ASSOCIATES_BOARD_ID = '7511353761';
 const DEALS_BOARD_ID = '7511353910';
+const EXTERNAL_EMAILS_BOARD_ID = '18391136284';
+const EXTERNAL_PHONE_COLUMN_ID = 'phone_mkybs1xx';
 const IGNORED_STATUSES = ['Closed'];
 
 async function mondayQuery(query, variables = {}) {
@@ -32,52 +34,82 @@ async function mondayQuery(query, variables = {}) {
 }
 
 async function buildAssociateMap() {
-  const query = `
-    query ($boardId: [ID!]!) {
-      boards(ids: $boardId) {
-        items_page(limit: 500) {
-          items {
-            id
-            name
-            column_values {
+  const associateMap = {};
+  let cursor = null;
+  let totalItems = 0;
+
+  do {
+    const query = cursor ? `
+      query ($boardId: [ID!]!, $cursor: String!) {
+        boards(ids: $boardId) {
+          items_page(limit: 500, cursor: $cursor) {
+            cursor
+            items {
               id
-              text
-              value
+              name
+              column_values {
+                id
+                text
+                value
+              }
             }
           }
         }
       }
-    }
-  `;
-
-  const result = await mondayQuery(query, { boardId: [ASSOCIATES_BOARD_ID] });
-  const items = result.boards[0]?.items_page?.items || [];
-
-  const associateMap = {};
-
-  for (const item of items) {
-    let phone = null;
-    let closer = null;
-
-    for (const col of item.column_values) {
-      if (col.id === 'ss_mobile' && col.text && col.text !== 'null' && col.text.length >= 10) {
-        phone = col.text;
+    ` : `
+      query ($boardId: [ID!]!) {
+        boards(ids: $boardId) {
+          items_page(limit: 500) {
+            cursor
+            items {
+              id
+              name
+              column_values {
+                id
+                text
+                value
+              }
+            }
+          }
+        }
       }
-      if (col.id === 'lead_closer' && col.text && col.text !== 'null') {
-        closer = col.text;
+    `;
+
+    const variables = cursor
+      ? { boardId: [ASSOCIATES_BOARD_ID], cursor }
+      : { boardId: [ASSOCIATES_BOARD_ID] };
+
+    const result = await mondayQuery(query, variables);
+    const itemsPage = result.boards[0]?.items_page;
+    const items = itemsPage?.items || [];
+    cursor = itemsPage?.cursor;
+    totalItems += items.length;
+
+    for (const item of items) {
+      let phone = null;
+      let closer = null;
+
+      for (const col of item.column_values) {
+        if (col.id === 'ss_mobile' && col.text && col.text !== 'null' && col.text.length >= 10) {
+          phone = col.text;
+        }
+        if (col.id === 'lead_closer' && col.text && col.text !== 'null') {
+          closer = col.text;
+        }
+      }
+
+      if (phone) {
+        const normalizedPhone = phone.replace(/\D/g, '');
+        associateMap[item.id] = {
+          name: item.name,
+          phone: normalizedPhone,
+          closer: closer
+        };
       }
     }
+  } while (cursor);
 
-    if (phone) {
-      const normalizedPhone = phone.replace(/\D/g, '');
-      associateMap[item.id] = {
-        name: item.name,
-        phone: normalizedPhone,
-        closer: closer
-      };
-    }
-  }
-
+  console.log(`[MONDAY] Built associate map with ${Object.keys(associateMap).length} entries (${totalItems} total)`);
   return associateMap;
 }
 
@@ -92,69 +124,99 @@ async function lookupDealsByPhone(phoneNumber) {
 
   const associateMap = await buildAssociateMap();
 
-  const query = `
-    query ($boardId: [ID!]!) {
-      boards(ids: $boardId) {
-        items_page(limit: 500) {
-          items {
-            id
-            name
-            column_values {
+  const matchingDeals = [];
+  let cursor = null;
+  let totalDeals = 0;
+
+  do {
+    const query = cursor ? `
+      query ($boardId: [ID!]!, $cursor: String!) {
+        boards(ids: $boardId) {
+          items_page(limit: 500, cursor: $cursor) {
+            cursor
+            items {
               id
-              text
-              value
+              name
+              column_values {
+                id
+                text
+                value
+              }
             }
           }
         }
       }
+    ` : `
+      query ($boardId: [ID!]!) {
+        boards(ids: $boardId) {
+          items_page(limit: 500) {
+            cursor
+            items {
+              id
+              name
+              column_values {
+                id
+                text
+                value
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    const variables = cursor
+      ? { boardId: [DEALS_BOARD_ID], cursor }
+      : { boardId: [DEALS_BOARD_ID] };
+
+    const result = await mondayQuery(query, variables);
+    const itemsPage = result.boards[0]?.items_page;
+    const items = itemsPage?.items || [];
+    cursor = itemsPage?.cursor;
+    totalDeals += items.length;
+
+    for (const item of items) {
+      const statusCol = item.column_values.find(cv => cv.id === 'lead_status__1');
+      const dealStatus = statusCol?.text || '';
+      if (IGNORED_STATUSES.includes(dealStatus)) continue;
+
+      const dealContactCol = item.column_values.find(cv => cv.id === 'deal_contact');
+      let associateId = null;
+      if (dealContactCol?.value) {
+        try {
+          const parsed = JSON.parse(dealContactCol.value);
+          associateId = parsed.linkedPulseIds?.[0]?.linkedPulseId;
+        } catch (e) {}
+      }
+
+      const associateInfo = associateId ? associateMap[associateId] : null;
+      if (!associateInfo?.phone) continue;
+
+      const assocPhone = associateInfo.phone;
+      const assocPhoneShort = assocPhone.startsWith('1') ? assocPhone.substring(1) : assocPhone;
+      const assocPhoneLong = assocPhone.startsWith('1') ? assocPhone : '1' + assocPhone;
+
+      if (!phoneVariants.includes(assocPhone) &&
+          !phoneVariants.includes(assocPhoneShort) &&
+          !phoneVariants.includes(assocPhoneLong)) {
+        continue;
+      }
+
+      const teamCol = item.column_values.find(cv => cv.id === 'main_team');
+      const team = teamCol?.text || item.name.split(' - ')[1] || '';
+
+      matchingDeals.push({
+        id: item.id,
+        name: item.name,
+        associateName: associateInfo.name || item.name.split(' - ')[0],
+        closer: associateInfo.closer,
+        team: team,
+        status: dealStatus
+      });
     }
-  `;
+  } while (cursor);
 
-  const result = await mondayQuery(query, { boardId: [DEALS_BOARD_ID] });
-  const items = result.boards[0]?.items_page?.items || [];
-
-  const matchingDeals = [];
-
-  for (const item of items) {
-    const statusCol = item.column_values.find(cv => cv.id === 'lead_status__1');
-    const dealStatus = statusCol?.text || '';
-    if (IGNORED_STATUSES.includes(dealStatus)) continue;
-
-    const dealContactCol = item.column_values.find(cv => cv.id === 'deal_contact');
-    let associateId = null;
-    if (dealContactCol?.value) {
-      try {
-        const parsed = JSON.parse(dealContactCol.value);
-        associateId = parsed.linkedPulseIds?.[0]?.linkedPulseId;
-      } catch (e) {}
-    }
-
-    const associateInfo = associateId ? associateMap[associateId] : null;
-    if (!associateInfo?.phone) continue;
-
-    const assocPhone = associateInfo.phone;
-    const assocPhoneShort = assocPhone.startsWith('1') ? assocPhone.substring(1) : assocPhone;
-    const assocPhoneLong = assocPhone.startsWith('1') ? assocPhone : '1' + assocPhone;
-
-    if (!phoneVariants.includes(assocPhone) &&
-        !phoneVariants.includes(assocPhoneShort) &&
-        !phoneVariants.includes(assocPhoneLong)) {
-      continue;
-    }
-
-    const teamCol = item.column_values.find(cv => cv.id === 'main_team');
-    const team = teamCol?.text || item.name.split(' - ')[1] || '';
-
-    matchingDeals.push({
-      id: item.id,
-      name: item.name,
-      associateName: associateInfo.name || item.name.split(' - ')[0],
-      closer: associateInfo.closer,
-      team: team,
-      status: dealStatus
-    });
-  }
-
+  console.log(`[MONDAY] Searched ${totalDeals} deals, found ${matchingDeals.length} matches`);
   return matchingDeals;
 }
 
@@ -322,6 +384,7 @@ function doesAreaCodeMatchTeam(areaCode, teamName) {
 
 /**
  * Search Associates board by email to find SS mobile number
+ * Uses Monday's server-side filtering for speed
  * @param {string} email - Email to search for
  * @returns {Promise<{name: string, phone: string, email: string}|null>}
  */
@@ -329,6 +392,170 @@ async function searchAssociateByEmail(email) {
   const normalizedEmail = email.toLowerCase().trim();
 
   console.log(`[MONDAY] Searching for email: ${normalizedEmail}`);
+
+  // Use items_page_by_column_values for server-side filtering (much faster)
+  const query = `
+    query ($boardId: ID!, $columnId: String!, $columnValue: String!) {
+      items_page_by_column_values(
+        board_id: $boardId,
+        columns: [{ column_id: $columnId, column_values: [$columnValue] }],
+        limit: 10
+      ) {
+        items {
+          id
+          name
+          column_values {
+            id
+            text
+          }
+        }
+      }
+    }
+  `;
+
+  try {
+    const result = await mondayQuery(query, {
+      boardId: ASSOCIATES_BOARD_ID,
+      columnId: 'ss_email',
+      columnValue: normalizedEmail
+    });
+
+    const items = result.items_page_by_column_values?.items || [];
+    console.log(`[MONDAY] Server-side search found ${items.length} matches`);
+
+    for (const item of items) {
+      let phone = null;
+      let itemEmail = null;
+
+      for (const col of item.column_values) {
+        if (col.id === 'ss_mobile' && col.text && col.text !== 'null' && col.text.length >= 10) {
+          phone = col.text;
+        }
+        if (col.id === 'ss_email' && col.text && col.text !== 'null') {
+          itemEmail = col.text;
+        }
+      }
+
+      // Verify exact match (case-insensitive)
+      if (itemEmail && itemEmail.toLowerCase().trim() === normalizedEmail) {
+        if (phone) {
+          console.log(`[MONDAY] Found match: ${item.name}, phone=${phone}`);
+          return {
+            name: item.name,
+            phone: phone.replace(/\D/g, ''),
+            email: itemEmail
+          };
+        } else {
+          console.log(`[MONDAY] ⚠️ Email matches but ss_mobile is empty for ${item.name}`);
+        }
+      }
+    }
+
+    console.log(`[MONDAY] No match found for ${normalizedEmail}`);
+    return null;
+
+  } catch (err) {
+    // Fallback to pagination if server-side filter fails
+    console.log(`[MONDAY] Server-side search failed, falling back to pagination: ${err.message}`);
+    return searchAssociateByEmailPaginated(email);
+  }
+}
+
+/**
+ * Fallback: Search using pagination (slower but more reliable)
+ */
+async function searchAssociateByEmailPaginated(email) {
+  const normalizedEmail = email.toLowerCase().trim();
+  let cursor = null;
+  let totalItems = 0;
+  let pageNum = 0;
+
+  do {
+    pageNum++;
+    const query = cursor ? `
+      query ($boardId: [ID!]!, $cursor: String!) {
+        boards(ids: $boardId) {
+          items_page(limit: 500, cursor: $cursor) {
+            cursor
+            items {
+              id
+              name
+              column_values {
+                id
+                text
+              }
+            }
+          }
+        }
+      }
+    ` : `
+      query ($boardId: [ID!]!) {
+        boards(ids: $boardId) {
+          items_page(limit: 500) {
+            cursor
+            items {
+              id
+              name
+              column_values {
+                id
+                text
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    const variables = cursor
+      ? { boardId: [ASSOCIATES_BOARD_ID], cursor }
+      : { boardId: [ASSOCIATES_BOARD_ID] };
+
+    const result = await mondayQuery(query, variables);
+    const itemsPage = result.boards[0]?.items_page;
+    const items = itemsPage?.items || [];
+    cursor = itemsPage?.cursor;
+    totalItems += items.length;
+
+    console.log(`[MONDAY] Page ${pageNum}: ${items.length} associates (total: ${totalItems})`);
+
+    for (const item of items) {
+      let phone = null;
+      let itemEmail = null;
+
+      for (const col of item.column_values) {
+        if (col.id === 'ss_mobile' && col.text && col.text !== 'null' && col.text.length >= 10) {
+          phone = col.text;
+        }
+        if (col.id === 'ss_email' && col.text && col.text !== 'null' && col.text.includes('@')) {
+          itemEmail = col.text;
+        }
+      }
+
+      if (itemEmail && itemEmail.toLowerCase().trim() === normalizedEmail && phone) {
+        console.log(`[MONDAY] Found match: ${item.name}, phone=${phone}`);
+        return {
+          name: item.name,
+          phone: phone.replace(/\D/g, ''),
+          email: itemEmail
+        };
+      }
+    }
+  } while (cursor);
+
+  console.log(`[MONDAY] No match found for ${normalizedEmail} (searched ${totalItems} associates)`);
+  return null;
+}
+
+/**
+ * Search External Emails board by email (item name) to find linked phone number
+ * This board is for non-associate emails (external TM accounts)
+ * @param {string} email - Email to search for
+ * @returns {Promise<{name: string, phone: string, email: string}|null>}
+ */
+async function searchExternalByEmail(email) {
+  const normalizedEmail = email.toLowerCase().trim();
+
+  console.log(`[MONDAY] Searching External Emails board for: ${normalizedEmail}`);
 
   const query = `
     query ($boardId: [ID!]!) {
@@ -348,48 +575,42 @@ async function searchAssociateByEmail(email) {
     }
   `;
 
-  const result = await mondayQuery(query, { boardId: [ASSOCIATES_BOARD_ID] });
+  const result = await mondayQuery(query, { boardId: [EXTERNAL_EMAILS_BOARD_ID] });
   const items = result.boards[0]?.items_page?.items || [];
 
-  console.log(`[MONDAY] Found ${items.length} associates`);
+  console.log(`[MONDAY] Found ${items.length} external email entries`);
 
   // Log column IDs from first item to debug
   if (items.length > 0) {
-    const colIds = items[0].column_values.map(c => c.id);
-    console.log(`[MONDAY] Column IDs: ${colIds.join(', ')}`);
+    const colIds = items[0].column_values.map(c => `${c.id}=${c.text || '(empty)'}`);
+    console.log(`[MONDAY] External board columns: ${colIds.join(', ')}`);
   }
 
   for (const item of items) {
-    let phone = null;
-    let itemEmail = null;
+    // Email is stored in item.name (the "Tm account" column)
+    const itemEmail = item.name;
 
-    for (const col of item.column_values) {
-      // Use ss_mobile for phone (ss_phone is mirrored/blank)
-      if (col.id === 'ss_mobile' && col.text && col.text !== 'null' && col.text.length >= 10) {
-        phone = col.text;
+    if (itemEmail && itemEmail.toLowerCase().trim() === normalizedEmail) {
+      // Get phone from the SS Phone column (phone_mkybs1xx)
+      const phoneCol = item.column_values.find(col => col.id === EXTERNAL_PHONE_COLUMN_ID);
+      const phone = phoneCol?.text && phoneCol.text !== 'null' && phoneCol.text.length >= 10
+        ? phoneCol.text
+        : null;
+
+      if (phone) {
+        console.log(`[MONDAY] Found external match: ${itemEmail}, phone=${phone}`);
+        return {
+          name: itemEmail, // Use email as name since this is external
+          phone: phone.replace(/\D/g, ''),
+          email: itemEmail
+        };
+      } else {
+        console.log(`[MONDAY] Found email ${itemEmail} but no phone number`);
       }
-      // Use ss_email for email
-      if (col.id === 'ss_email' && col.text && col.text !== 'null' && col.text.includes('@')) {
-        itemEmail = col.text;
-      }
-    }
-
-    // Debug: log associates that have emails
-    if (itemEmail && itemEmail.toLowerCase().includes(normalizedEmail.split('@')[0])) {
-      console.log(`[MONDAY] Potential match: ${item.name}, email=${itemEmail}, phone=${phone}`);
-    }
-
-    if (itemEmail && itemEmail.toLowerCase().trim() === normalizedEmail && phone) {
-      console.log(`[MONDAY] Found match: ${item.name}, phone=${phone}`);
-      return {
-        name: item.name,
-        phone: phone.replace(/\D/g, ''),
-        email: itemEmail
-      };
     }
   }
 
-  console.log(`[MONDAY] No match found for ${normalizedEmail}`);
+  console.log(`[MONDAY] No external match found for ${normalizedEmail}`);
   return null;
 }
 
@@ -400,5 +621,6 @@ module.exports = {
   doesAreaCodeMatchTeam,
   getCloserSlackId,
   searchAssociateByEmail,
+  searchExternalByEmail,
   STATE_NAMES
 };

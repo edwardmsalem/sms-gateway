@@ -5,6 +5,7 @@ const simbank = require('./simbank');
 const { formatPhoneDisplay, parsePhoneFromCommand, formatTime } = require('./utils');
 const { trackOutboundSms } = require('./deliveryTracker');
 const sweepTest = require('./sweepTest');
+const slotScan = require('./slotScan');
 const ticketmasterWatch = require('./ticketmasterWatch');
 
 const CHANNEL_ID = process.env.SLACK_CHANNEL_ID;
@@ -75,7 +76,7 @@ function isVerificationCode(content) {
   return false;
 }
 
-// Approved Slack user IDs who can send SMS via @SalemAI command
+// Approved Slack user IDs who can send SMS via @Salem AI command
 const APPROVED_SMS_USERS = ['U05BRER83HT', 'U08FY4FAJ9J', 'U0144K906KA'];
 
 // Create an ExpressReceiver so we can mount it on our Express app
@@ -106,7 +107,7 @@ function buildSmsBlocks({ recipientDisplay, senderDisplay, content, bankId, port
   } else {
     text += `From: ${senderDisplay}\n📍 *Bank ${bankId} · Slot ${port}*`;
     if (iccid) text += `\n• *ICCID:* ${iccid}`;
-    text += `\nReceived: ${timestamp}\n\n_Reply: @SalemAI ${bankId} ${port} followed by your message_`;
+    text += `\nReceived: ${timestamp}\n\n_Reply: @Salem AI ${bankId} ${port} followed by your message_`;
   }
 
   return [{
@@ -210,13 +211,13 @@ function buildEnrichedSmsBlocks({ content, bankId, port, enrichment, iccid }) {
 
     text += '\n';
     text += `"${content}"\n\n`;
-    text += `_Reply: @SalemAI reply ${bankId} ${port} followed by your message_`;
+    text += `_Reply: @Salem AI reply ${bankId} ${port} followed by your message_`;
   } else {
     // Format without deal info
     text += `📥 *New SMS to ${receiverPhoneFormatted}*\n`;
     text += `From: ${senderPhoneFormatted} · ${senderStateName || 'Unknown'}\n\n`;
     text += `"${content}"\n\n`;
-    text += `_Reply: @SalemAI reply ${bankId} ${port} followed by your message_`;
+    text += `_Reply: @Salem AI reply ${bankId} ${port} followed by your message_`;
   }
 
   return [{
@@ -530,17 +531,18 @@ function formatSlotStatusForSlack(status) {
 }
 
 /**
- * @SalemAI mention handler
+ * @Salem AI mention handler
  * Commands:
- * - @SalemAI tm <email> - Watch for Ticketmaster codes (SMS + Email)
- * - @SalemAI reply <bank> <slot> <message> - Send SMS reply (in thread)
- * - @SalemAI status <bank> <slot> - Check SIM slot status
+ * - @Salem AI tm <email> - Watch for Ticketmaster codes (SMS + Email)
+ * - @Salem AI scan - Run slot scan (cycles through slots 01-08)
+ * - @Salem AI reply <bank> <slot> <message> - Send SMS reply (in thread)
+ * - @Salem AI status <bank> <slot> - Check SIM slot status
  */
 app.event('app_mention', async ({ event, say }) => {
   await addReaction(event.channel, event.ts, 'eyes');
 
-  // Parse the command text
-  const fullText = event.text.replace(/<@[A-Z0-9]+>/g, '').trim();
+  // Parse the command text - handle both <@U123> and <@U123|username> formats
+  const fullText = event.text.replace(/<@[A-Z0-9]+(\|[^>]+)?>/gi, '').trim();
   const parts = fullText.split(/\s+/);
 
   // Check if this is a status command
@@ -550,7 +552,7 @@ app.event('app_mention', async ({ event, say }) => {
 
     if (!bankId || !slot) {
       await say({
-        text: 'Usage: `@SalemAI status [bank] [slot]`\nExample: `@SalemAI status 50004 4.07`',
+        text: 'Usage: `@Salem AI status [bank] [slot]`\nExample: `@Salem AI status 50004 4.07`',
         thread_ts: event.thread_ts || event.ts
       });
       return;
@@ -573,7 +575,7 @@ app.event('app_mention', async ({ event, say }) => {
     return;
   }
 
-  // Check if this is a Ticketmaster code watch: @SalemAI tm <email>
+  // Check if this is a Ticketmaster code watch: @Salem AI tm <email>
   if (parts[0]?.toLowerCase() === 'tm') {
     // Extract email - Slack auto-links as <mailto:user@example.com|user@example.com>
     const restOfText = fullText.replace(/^tm\s+/i, '');
@@ -581,7 +583,7 @@ app.event('app_mention', async ({ event, say }) => {
 
     if (!emailMatch) {
       await say({
-        text: 'Usage: `@SalemAI tm <email>`\nExample: `@SalemAI tm user@example.com`',
+        text: 'Usage: `@Salem AI tm <email>`\nExample: `@Salem AI tm user@example.com`',
         thread_ts: event.thread_ts || event.ts
       });
       return;
@@ -608,7 +610,48 @@ app.event('app_mention', async ({ event, say }) => {
     return;
   }
 
-  // Check if this is an SMS reply: @SalemAI reply <bank> <slot> <message>
+  // Check if this is a slot scan command: @Salem AI scan or @Salem AI slot scan
+  if (parts[0]?.toLowerCase() === 'scan' || (parts[0]?.toLowerCase() === 'slot' && parts[1]?.toLowerCase() === 'scan')) {
+    // Check if a scan is already running
+    if (slotScan.getActiveScan()) {
+      await say({
+        text: '⚠️ A slot scan is already in progress. Please wait for it to complete (~24 min).',
+        thread_ts: event.thread_ts || event.ts
+      });
+      return;
+    }
+
+    // Check if sweep test is running
+    if (sweepTest.getActiveTest()) {
+      await say({
+        text: '⚠️ A sweep test is in progress. Please wait for it to complete.',
+        thread_ts: event.thread_ts || event.ts
+      });
+      return;
+    }
+
+    await say({
+      text: '🔄 Starting slot scan... This will take ~24 minutes (8 slots × 3 min each)',
+      thread_ts: event.thread_ts || event.ts
+    });
+
+    // Run the scan asynchronously
+    setImmediate(() => {
+      slotScan.runSlotScan(app).catch(error => {
+        console.error('[SLOT SCAN] Failed:', error.message);
+        app.client.chat.postMessage({
+          channel: event.channel,
+          thread_ts: event.ts,
+          text: `:x: Slot scan failed: ${error.message}`
+        }).catch(e => console.error('[SLOT SCAN] Failed to post error:', e.message));
+      });
+    });
+
+    await addReaction(event.channel, event.ts, 'white_check_mark');
+    return;
+  }
+
+  // Check if this is an SMS reply: @Salem AI reply <bank> <slot> <message>
   if (parts[0]?.toLowerCase() === 'reply') {
     // Check if user is authorized to send SMS
     if (!APPROVED_SMS_USERS.includes(event.user)) {
@@ -622,13 +665,13 @@ app.event('app_mention', async ({ event, say }) => {
     // Must be in a thread for SMS sending
     if (!event.thread_ts) {
       await say({
-        text: 'Please use `@SalemAI reply` in a conversation thread.\nUsage: `@SalemAI reply <bank> <slot> <message>`\nExample: `@SalemAI reply 50004 4.07 Hello there`',
+        text: 'Please use `@Salem AI reply` in a conversation thread.\nUsage: `@Salem AI reply <bank> <slot> <message>`\nExample: `@Salem AI reply 50004 4.07 Hello there`',
         thread_ts: event.ts
       });
       return;
     }
 
-    // Parse: @SalemAI reply [bank] [slot] [message]
+    // Parse: @Salem AI reply [bank] [slot] [message]
     const specifiedBank = parts[1];
     const specifiedSlot = parts[2];
     const message = parts.slice(3).join(' ');
@@ -636,7 +679,7 @@ app.event('app_mention', async ({ event, say }) => {
     // Validate bank format (e.g., "50004")
     if (!specifiedBank || !/^\d{5}$/.test(specifiedBank)) {
       await say({
-        text: `Invalid format. Bank ID is required (5 digits).\nUsage: \`@SalemAI reply <bank> <slot> <message>\`\nExample: \`@SalemAI reply 50004 4.07 Hello there\``,
+        text: `Invalid format. Bank ID is required (5 digits).\nUsage: \`@Salem AI reply <bank> <slot> <message>\`\nExample: \`@Salem AI reply 50004 4.07 Hello there\``,
         thread_ts: event.thread_ts
       });
       return;
@@ -645,7 +688,7 @@ app.event('app_mention', async ({ event, say }) => {
     // Validate slot format (e.g., "4.07", "1.01")
     if (!specifiedSlot || !/^\d+\.\d+$/.test(specifiedSlot)) {
       await say({
-        text: `Invalid format. Slot is required.\nUsage: \`@SalemAI reply <bank> <slot> <message>\`\nExample: \`@SalemAI reply ${specifiedBank} 4.07 Hello there\``,
+        text: `Invalid format. Slot is required.\nUsage: \`@Salem AI reply <bank> <slot> <message>\`\nExample: \`@Salem AI reply ${specifiedBank} 4.07 Hello there\``,
         thread_ts: event.thread_ts
       });
       return;
@@ -653,7 +696,7 @@ app.event('app_mention', async ({ event, say }) => {
 
     if (!message) {
       await say({
-        text: `Message is required.\nUsage: \`@SalemAI reply ${specifiedBank} ${specifiedSlot} <message>\``,
+        text: `Message is required.\nUsage: \`@Salem AI reply ${specifiedBank} ${specifiedSlot} <message>\``,
         thread_ts: event.thread_ts
       });
       return;
@@ -754,7 +797,7 @@ app.event('app_mention', async ({ event, say }) => {
 
   // Default: show help message for unrecognized commands
   await say({
-    text: `*@SalemAI Commands:*\n• \`@SalemAI tm <email>\` - Watch for Ticketmaster codes\n• \`@SalemAI reply <bank> <slot> <message>\` - Send SMS reply (in thread)\n• \`@SalemAI status <bank> <slot>\` - Check SIM slot status`,
+    text: `*@Salem AI Commands:*\n• \`@Salem AI tm <email>\` - Watch for Ticketmaster codes\n• \`@Salem AI scan\` - Run slot scan (cycles slots 01-08)\n• \`@Salem AI reply <bank> <slot> <message>\` - Send SMS reply (in thread)\n• \`@Salem AI status <bank> <slot>\` - Check SIM slot status`,
     thread_ts: event.thread_ts || event.ts
   });
 });
@@ -1111,6 +1154,100 @@ app.command('/cleanup-duplicates', async ({ command, ack, respond }) => {
 
 /**
  * Message listener for "tm" command (without @SalemAI mention)
+ * /slot-scan command handler
+ * Cycles through all 8 slot positions across all SIM banks
+ * Each slot stays active for 3 minutes
+ * Usage: /slot-scan
+ */
+app.command('/slot-scan', async ({ command, ack, respond }) => {
+  await ack();
+
+  // Check if a scan is already running
+  if (slotScan.getActiveScan()) {
+    respond({
+      response_type: 'ephemeral',
+      text: 'A slot scan is already in progress. Please wait for it to complete (~24 min).'
+    });
+    return;
+  }
+
+  // Check if sweep test is running
+  if (sweepTest.getActiveTest()) {
+    respond({
+      response_type: 'ephemeral',
+      text: 'A sweep test is in progress. Please wait for it to complete.'
+    });
+    return;
+  }
+
+  respond({
+    response_type: 'ephemeral',
+    text: `🔄 Slot scan starting... This will take ~24 minutes (8 slots × 3 min each)`
+  });
+
+  // Run the scan asynchronously
+  setImmediate(() => {
+    slotScan.runSlotScan(app).catch(error => {
+      console.error('Slot scan failed:', error.message);
+      app.client.chat.postMessage({
+        channel: slotScan.TEST_CHANNEL_ID,
+        text: `:x: Slot scan failed: ${error.message}`
+      }).catch(e => console.error('Failed to post error message:', e.message));
+    });
+  });
+});
+
+/**
+ * Message listener for "scan" command (works in DMs and channels)
+ * Usage: scan
+ * Triggers slot scan
+ */
+app.message(/^scan$/i, async ({ message, say }) => {
+  // Ignore bot messages
+  if (message.bot_id || message.subtype === 'bot_message') {
+    return;
+  }
+
+  // Check if a scan is already running
+  if (slotScan.getActiveScan()) {
+    await say({
+      text: '⚠️ A slot scan is already in progress. Please wait for it to complete (~24 min).',
+      thread_ts: message.ts
+    });
+    return;
+  }
+
+  // Check if sweep test is running
+  if (sweepTest.getActiveTest()) {
+    await say({
+      text: '⚠️ A sweep test is in progress. Please wait for it to complete.',
+      thread_ts: message.ts
+    });
+    return;
+  }
+
+  console.log(`[SCAN] Triggered by user ${message.user} via message`);
+
+  await say({
+    text: '🔄 Starting slot scan... This will take ~24 minutes (8 slots × 3 min each)',
+    thread_ts: message.ts
+  });
+
+  // Run the scan asynchronously
+  setImmediate(() => {
+    slotScan.runSlotScan(app).catch(error => {
+      console.error('[SCAN] Failed:', error.message);
+      app.client.chat.postMessage({
+        channel: message.channel,
+        thread_ts: message.ts,
+        text: `:x: Slot scan failed: ${error.message}`
+      }).catch(e => console.error('[SCAN] Failed to post error:', e.message));
+    });
+  });
+});
+
+/**
+ * Message listener for "tm" command (without @Salem AI mention)
  * Usage: tm email@example.com
  * Triggers Ticketmaster code watch workflow
  */

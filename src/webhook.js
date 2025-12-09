@@ -8,6 +8,7 @@ const { updateLastKnownSlot, getSlotStatus } = require('./simbank');
 const { classifyMessage } = require('./spamFilter');
 const monday = require('./monday');
 const sweepTest = require('./sweepTest');
+const slotScan = require('./slotScan');
 const ticketmasterWatch = require('./ticketmasterWatch');
 
 // Message deduplication - track recently processed messages to prevent duplicates
@@ -243,6 +244,7 @@ router.post('/sms', async (req, res) => {
       console.log(`[SPAM BLOCKED] Short code filtered: ${senderPhone}`);
       await slack.postSpamMessage(senderPhone, recipientPhone, content, { spam: true, category: 'Short Code', confidence: 'high' }, bank, slot);
       sweepTest.recordMessageArrival('spam', slot);
+      slotScan.recordMessageArrival('spam', bank, slot);
       return res.status(200).json({ status: 'spam_filtered', category: 'Short Code' });
     }
 
@@ -252,8 +254,9 @@ router.post('/sms', async (req, res) => {
       if (spamResult.spam) {
         console.log(`[SPAM BLOCKED] From ${senderPhone}: category=${spamResult.category}, confidence=${spamResult.confidence}`);
         await slack.postSpamMessage(senderPhone, recipientPhone, content, spamResult, bank, slot);
-        // Track for sweep test if active
+        // Track for sweep test / slot scan if active
         sweepTest.recordMessageArrival('spam', slot);
+        slotScan.recordMessageArrival('spam', bank, slot);
         return res.status(200).json({ status: 'spam_filtered', category: spamResult.category });
       }
     }
@@ -355,9 +358,10 @@ router.post('/sms', async (req, res) => {
       }
     }
 
-    // Track for sweep test if active
+    // Track for sweep test / slot scan if active
     const channelType = isVerification ? 'verification' : 'sms';
     sweepTest.recordMessageArrival(channelType, slot);
+    slotScan.recordMessageArrival(channelType, bank, slot);
 
     // Check for active Ticketmaster watch and notify if message contains "Ticketmaster"
     ticketmasterWatch.checkWatchAndNotify(recipientPhone, senderPhone, content, slack.app);
