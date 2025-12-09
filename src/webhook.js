@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('crypto');
 const db = require('./database');
 const slack = require('./slack');
 const { normalizePhone } = require('./utils');
@@ -7,7 +8,49 @@ const { updateLastKnownSlot, getSlotStatus } = require('./simbank');
 const { classifyMessage } = require('./spamFilter');
 const monday = require('./monday');
 const sweepTest = require('./sweepTest');
+const slotScan = require('./slotScan');
 const ticketmasterWatch = require('./ticketmasterWatch');
+
+// Message deduplication - track recently processed messages to prevent duplicates
+// Key: hash of sender+recipient+content, Value: timestamp
+const recentMessages = new Map();
+const DEDUPE_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
+
+/**
+ * Generate a deduplication key for a message
+ */
+function getMessageKey(sender, recipient, content) {
+  const data = `${sender}|${recipient}|${content}`;
+  return crypto.createHash('md5').update(data).digest('hex');
+}
+
+/**
+ * Check if message is a duplicate (seen within dedupe window)
+ * Returns true if duplicate, false if new
+ */
+function isDuplicateMessage(sender, recipient, content) {
+  const key = getMessageKey(sender, recipient, content);
+  const now = Date.now();
+
+  // Clean up old entries periodically (every 100 checks)
+  if (recentMessages.size > 100) {
+    for (const [k, timestamp] of recentMessages) {
+      if (now - timestamp > DEDUPE_WINDOW_MS) {
+        recentMessages.delete(k);
+      }
+    }
+  }
+
+  if (recentMessages.has(key)) {
+    const lastSeen = recentMessages.get(key);
+    if (now - lastSeen < DEDUPE_WINDOW_MS) {
+      return true; // Duplicate
+    }
+  }
+
+  recentMessages.set(key, now);
+  return false; // New message
+}
 
 /**
  * Format phone number for display
@@ -179,6 +222,12 @@ router.post('/sms', async (req, res) => {
       return res.status(200).json({ status: 'delivery_report_processed' });
     }
 
+    // Check for duplicate messages (same sender+recipient+content within 5 min)
+    if (isDuplicateMessage(senderPhone, recipientPhone, content)) {
+      console.log(`[DEDUPE] Skipping duplicate message from ${senderPhone} to ${recipientPhone}`);
+      return res.status(200).json({ status: 'duplicate_skipped' });
+    }
+
     // Check if sender is blocked
     if (db.isNumberBlocked(senderPhone)) {
       return res.status(200).json({ status: 'blocked' });
@@ -195,6 +244,7 @@ router.post('/sms', async (req, res) => {
       console.log(`[SPAM BLOCKED] Short code filtered: ${senderPhone}`);
       await slack.postSpamMessage(senderPhone, recipientPhone, content, { spam: true, category: 'Short Code', confidence: 'high' }, bank, slot);
       sweepTest.recordMessageArrival('spam', slot);
+      slotScan.recordMessageArrival('spam', bank, slot);
       return res.status(200).json({ status: 'spam_filtered', category: 'Short Code' });
     }
 
@@ -204,8 +254,9 @@ router.post('/sms', async (req, res) => {
       if (spamResult.spam) {
         console.log(`[SPAM BLOCKED] From ${senderPhone}: category=${spamResult.category}, confidence=${spamResult.confidence}`);
         await slack.postSpamMessage(senderPhone, recipientPhone, content, spamResult, bank, slot);
-        // Track for sweep test if active
+        // Track for sweep test / slot scan if active
         sweepTest.recordMessageArrival('spam', slot);
+        slotScan.recordMessageArrival('spam', bank, slot);
         return res.status(200).json({ status: 'spam_filtered', category: spamResult.category });
       }
     }
@@ -307,9 +358,10 @@ router.post('/sms', async (req, res) => {
       }
     }
 
-    // Track for sweep test if active
+    // Track for sweep test / slot scan if active
     const channelType = isVerification ? 'verification' : 'sms';
     sweepTest.recordMessageArrival(channelType, slot);
+    slotScan.recordMessageArrival(channelType, bank, slot);
 
     // Check for active Ticketmaster watch and notify if message contains "Ticketmaster"
     ticketmasterWatch.checkWatchAndNotify(recipientPhone, senderPhone, content, slack.app);

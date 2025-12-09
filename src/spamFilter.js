@@ -7,12 +7,23 @@ const SPAM_CLASSIFICATION_PROMPT = `You are an SMS spam classifier for a ticket 
 DEFAULT: ALLOW messages unless they clearly match a spam category below. When in doubt, allow the message through.
 
 BLOCK these categories (spam):
-- Debt collection
-- Medicare/health insurance
-- Dating/adult content
+- Non-English messages (Spanish, Chinese, etc. - any language other than English)
+- Wigs/Hair marketing (wig, lace front, bundles, UNice, hair sale)
+- Fashion/Retail spam (Fashion Nova, SHEIN, Temu, DHgate, "50% off your order")
+- Weight loss spam (weight loss, keto, ozempic, diet pill)
+- CBD/Cannabis (CBD, gummies, THC, dispensary)
+- Porn/Adult/Dating (singles in your area, dating, hookup, adult content)
+- Crypto/NFT spam (bitcoin, crypto, NFT, ethereum, blockchain)
+- Amazon employee alerts (Amazon A to Z, AtoZ, "your shift has been")
+- Weather alerts (tornado warning, flash flood warning, Weather Alert)
+- Debt collection (debt collector, "attempt to collect", past due account)
+- Loan spam (pre-approved for, credit limit increase, personal loan offers)
+- Medicare/Insurance (medicare, open enrollment, health coverage, ACA plan)
+- Shipping/Delivery notifications (your package, delivery attempt, out for delivery, has shipped, tracking number, SPEEDX, GOFO Express, UPS, FedEx, USPS, DHL)
+- Pharmacy/prescription notifications (Rx ready, refill reminders, Kroger pharmacy, CVS, Walgreens)
+- Appointment reminders (doctor, dentist, therapy, telehealth, salon appointments)
+- Healthcare/therapy marketing (clinics soliciting clients, wellness services, mental health outreach, booking links)
 - Political campaigns
-- Investment/crypto scams
-- Fashion/retail marketing promos
 - Vehicle warranties
 - Legal services solicitation
 - Sweepstakes/prizes
@@ -23,19 +34,19 @@ BLOCK these categories (spam):
 - Fitness/gym marketing
 - Real estate/mortgage marketing
 - Job/work from home offers
-- Package delivery scams
 - Fake bank alerts
 - Tax relief scams
-- Home services solicitation (roofing, HVAC, etc.)
-- Automated opt-out confirmations ("You've been unsubscribed")
+- Home services solicitation (roofing, HVAC, plumbing, etc.)
+- Automated opt-out confirmations ("You've been unsubscribed", "Reply STOP")
 
-ALWAYS ALLOW:
+ALWAYS ALLOW (never block these):
 - Short conversational messages (greetings, "test", "ok", "thanks", etc.)
-- Any message that seems like personal communication
+- Any message that seems like personal communication between humans
 - Questions or responses to questions
-- Game day notifications
+- Game day notifications related to tickets/events
 - Event/venue logistics
-- Verification codes from any source
+- Verification codes from any source (these are CRITICAL - never block)
+- Ticket-related messages (seats, tickets, section, row, transfer)
 - Anything that doesn't clearly match a BLOCK category
 
 Respond with JSON only:
