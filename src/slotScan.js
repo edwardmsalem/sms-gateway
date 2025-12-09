@@ -15,6 +15,20 @@ const VERIFICATION_DELAY_MS = 5000; // Wait 5 seconds before verifying
 // Active scan state
 let activeScan = null;
 
+// Port status meanings (from simbank.js)
+const PORT_STATUS = {
+  0: 'No SIM card',
+  1: 'Idle SIM present',
+  2: 'Registering',
+  3: 'Registered - Ready',
+  4: 'Call connected',
+  5: 'Register failed',
+  6: 'Low balance',
+  7: 'Locked by device',
+  8: 'Locked by operator',
+  9: 'SIM card error'
+};
+
 /**
  * Get active scan state
  */
@@ -112,24 +126,28 @@ async function verifySlotActivation(bank, slotPosition) {
     });
 
     if (!response.ok) {
-      return { error: `HTTP ${response.status}`, activeCount: 0, totalPorts: 0 };
+      return { error: `HTTP ${response.status}`, activeCount: 0, totalPorts: 0, simPresent: 0, noSim: 0 };
     }
 
     const data = await response.json();
     const statusArray = data.status || data;
 
     if (!Array.isArray(statusArray)) {
-      return { error: 'Invalid response format', activeCount: 0, totalPorts: 0 };
+      return { error: 'Invalid response format', activeCount: 0, totalPorts: 0, simPresent: 0, noSim: 0 };
     }
 
     // Count ports where active=1 and slot matches expected position
     let activeCount = 0;
     let correctSlotCount = 0;
+    let simPresent = 0;
+    let noSim = 0;
+    let registered = 0;
     const portDetails = [];
 
     for (const slot of statusArray) {
       const port = String(slot.port || '');
       const isActive = slot.active === 1 || slot.active === '1';
+      const st = parseInt(slot.st, 10);
 
       // Check if this port's slot matches expected (e.g., "35.04" should have .04 for slot 4)
       const slotSuffix = port.split('.')[1];
@@ -138,9 +156,17 @@ async function verifySlotActivation(bank, slotPosition) {
       if (isActive) activeCount++;
       if (isActive && isCorrectSlot) correctSlotCount++;
 
+      // Count SIM presence
+      if (st === 0) {
+        noSim++;
+      } else {
+        simPresent++;
+        if (st === 3) registered++;
+      }
+
       // Sample some ports for logging
       if (portDetails.length < 5 && isActive) {
-        portDetails.push(`${port}(st=${slot.st})`);
+        portDetails.push(`${port}(st=${st})`);
       }
     }
 
@@ -148,10 +174,13 @@ async function verifySlotActivation(bank, slotPosition) {
       activeCount,
       correctSlotCount,
       totalPorts: statusArray.length,
-      samplePorts: portDetails
+      samplePorts: portDetails,
+      simPresent,
+      noSim,
+      registered
     };
   } catch (err) {
-    return { error: err.message, activeCount: 0, totalPorts: 0 };
+    return { error: err.message, activeCount: 0, totalPorts: 0, simPresent: 0, noSim: 0 };
   }
 }
 
@@ -241,16 +270,29 @@ async function runSlotScan(slackApp) {
 
       // Build verification status
       let verifyStatus = '';
+      let totalSimPresent = 0;
+      let totalNoSim = 0;
+      let totalRegistered = 0;
+
       for (const v of verificationResults) {
         if (v.error) {
           verifyStatus += `\n• Bank ${v.bankId}: ⚠️ ${v.error}`;
         } else {
           const icon = v.correctSlotCount > 0 ? '✅' : '⚠️';
           verifyStatus += `\n• Bank ${v.bankId}: ${icon} ${v.correctSlotCount} ports on .${slotStr}, ${v.activeCount} total active`;
+          verifyStatus += `\n  📶 SIMs: ${v.simPresent} present (${v.registered} registered), ${v.noSim} empty`;
           if (v.samplePorts.length > 0) {
-            verifyStatus += ` (${v.samplePorts.join(', ')})`;
+            verifyStatus += `\n  Sample: ${v.samplePorts.join(', ')}`;
           }
+          totalSimPresent += v.simPresent;
+          totalNoSim += v.noSim;
+          totalRegistered += v.registered;
         }
+      }
+
+      // Store SIM stats for final summary
+      if (!activeScan.simStats) {
+        activeScan.simStats = { simPresent: totalSimPresent, noSim: totalNoSim, registered: totalRegistered };
       }
 
       // Update with switch + verification results
@@ -283,11 +325,29 @@ async function runSlotScan(slackApp) {
     const totalDuration = Math.round((Date.now() - activeScan.startTime) / 1000 / 60);
     const totalArrivals = activeScan.arrivals.length;
 
+    // Build per-port message tally
+    const portMessageCounts = new Map();
+    for (const arrival of activeScan.arrivals) {
+      // Extract port number from slot (e.g., "4.07" -> "4")
+      const portNum = arrival.slot ? arrival.slot.split('.')[0] : 'unknown';
+      const key = `${arrival.bankId}-${portNum}`;
+      portMessageCounts.set(key, (portMessageCounts.get(key) || 0) + 1);
+    }
+
     // Build results summary
     let resultsText = `🔄 *Slot Scan Complete*\n\n`;
     resultsText += `*Duration:* ${totalDuration} minutes\n`;
-    resultsText += `*Total messages:* ${totalArrivals}\n\n`;
-    resultsText += `*Results by slot:*\n`;
+    resultsText += `*Total messages:* ${totalArrivals}\n`;
+
+    // Include SIM stats
+    if (activeScan.simStats) {
+      const { simPresent, noSim, registered } = activeScan.simStats;
+      resultsText += `\n*SIM Card Status:*\n`;
+      resultsText += `• 📶 SIMs present: ${simPresent} (${registered} registered/ready)\n`;
+      resultsText += `• ❌ Empty slots: ${noSim}\n`;
+    }
+
+    resultsText += `\n*Results by slot position:*\n`;
 
     for (const slotResult of activeScan.slotResults) {
       const slotStr = String(slotResult.slot).padStart(2, '0');
@@ -308,6 +368,57 @@ async function runSlotScan(slackApp) {
       channel: TEST_CHANNEL_ID,
       text: resultsText
     });
+
+    // Post per-port breakdown per bank
+    for (const bank of banks) {
+      const bankPorts = [];
+      for (let port = 1; port <= PORTS_PER_BANK; port++) {
+        const key = `${bank.bank_id}-${port}`;
+        const count = portMessageCounts.get(key) || 0;
+        bankPorts.push({ port, count });
+      }
+
+      // Find ports with 0 messages (potentially odd)
+      const zeroPorts = bankPorts.filter(p => p.count === 0).map(p => p.port);
+      const activePorts = bankPorts.filter(p => p.count > 0);
+
+      let portText = `📊 *Bank ${bank.bank_id} - Per-Port Message Tally*\n\n`;
+
+      if (activePorts.length > 0) {
+        portText += `*Ports with messages:*\n`;
+        // Group by count for cleaner display
+        const countGroups = new Map();
+        for (const p of activePorts) {
+          const ports = countGroups.get(p.count) || [];
+          ports.push(p.port);
+          countGroups.set(p.count, ports);
+        }
+
+        // Sort by count descending
+        const sortedCounts = [...countGroups.entries()].sort((a, b) => b[0] - a[0]);
+        for (const [count, ports] of sortedCounts) {
+          portText += `• ${count} msg${count > 1 ? 's' : ''}: ports ${ports.join(', ')}\n`;
+        }
+      } else {
+        portText += `⚠️ *No messages received from any port*\n`;
+      }
+
+      if (zeroPorts.length > 0) {
+        portText += `\n⚠️ *Ports with 0 messages (${zeroPorts.length}):*\n`;
+        // Show first 20 to avoid spam
+        if (zeroPorts.length <= 20) {
+          portText += `${zeroPorts.join(', ')}\n`;
+        } else {
+          portText += `${zeroPorts.slice(0, 20).join(', ')}... and ${zeroPorts.length - 20} more\n`;
+        }
+        portText += `_These may be empty slots or inactive SIMs_`;
+      }
+
+      await slackApp.client.chat.postMessage({
+        channel: TEST_CHANNEL_ID,
+        text: portText
+      });
+    }
 
     console.log(`[SLOT SCAN] Complete. Total ${totalArrivals} messages.`);
 
