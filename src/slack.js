@@ -1068,11 +1068,37 @@ app.command('/cleanup-duplicates', async ({ command, ack, respond }) => {
   });
 
   setImmediate(async () => {
+    let progressTs = null;
+
+    // Helper to post/update progress
+    async function updateProgress(text) {
+      try {
+        if (progressTs) {
+          await app.client.chat.update({
+            channel: channelId,
+            ts: progressTs,
+            text
+          });
+        } else {
+          const result = await app.client.chat.postMessage({
+            channel: channelId,
+            text
+          });
+          progressTs = result.ts;
+        }
+      } catch (err) {
+        console.warn('[CLEANUP] Progress update failed:', err.message);
+      }
+    }
+
     try {
+      await updateProgress('🔍 Fetching channel history...');
+
       // Get conversation history
       const oldestTs = (Date.now() / 1000 - hours * 3600).toString();
       let allMessages = [];
       let cursor;
+      let pageCount = 0;
 
       // Paginate through all top-level messages
       do {
@@ -1085,12 +1111,20 @@ app.command('/cleanup-duplicates', async ({ command, ack, respond }) => {
 
         allMessages = allMessages.concat(result.messages || []);
         cursor = result.response_metadata?.next_cursor;
+        pageCount++;
+
+        if (pageCount % 5 === 0) {
+          await updateProgress(`🔍 Fetched ${allMessages.length} messages so far...`);
+        }
       } while (cursor);
+
+      await updateProgress(`🔍 Found ${allMessages.length} messages. Scanning threads...`);
 
       // Also fetch thread replies for messages that have them
       const threadsToFetch = allMessages.filter(m => m.reply_count > 0);
 
-      for (const parentMsg of threadsToFetch) {
+      for (let i = 0; i < threadsToFetch.length; i++) {
+        const parentMsg = threadsToFetch[i];
         try {
           const replies = await app.client.conversations.replies({
             channel: channelId,
@@ -1108,7 +1142,14 @@ app.command('/cleanup-duplicates', async ({ command, ack, respond }) => {
 
         // Rate limit thread fetches
         await new Promise(r => setTimeout(r, 200));
+
+        // Progress update every 20 threads
+        if ((i + 1) % 20 === 0) {
+          await updateProgress(`🔍 Scanned ${i + 1}/${threadsToFetch.length} threads (${allMessages.length} messages)...`);
+        }
       }
+
+      await updateProgress(`🔍 Analyzing ${allMessages.length} messages for duplicates...`);
 
       // Filter to bot messages (more lenient - any bot message)
       const botMessages = allMessages.filter(m => m.bot_id && m.text);
@@ -1167,12 +1208,11 @@ app.command('/cleanup-duplicates', async ({ command, ack, respond }) => {
       }
 
       if (duplicates.length === 0) {
-        await app.client.chat.postMessage({
-          channel: channelId,
-          text: `✅ No duplicates found in the last ${hours} hours.\n• Scanned: ${allMessages.length} messages (${threadsToFetch.length} threads)\n• Bot messages checked: ${botMessages.length}`
-        });
+        await updateProgress(`✅ No duplicates found in the last ${hours} hours.\n• Scanned: ${allMessages.length} messages (${threadsToFetch.length} threads)\n• Bot messages checked: ${botMessages.length}`);
         return;
       }
+
+      await updateProgress(`🗑️ Found ${duplicates.length} duplicates. Deleting...`);
 
       // Delete duplicates
       let deleted = 0;
@@ -1192,21 +1232,16 @@ app.command('/cleanup-duplicates', async ({ command, ack, respond }) => {
 
         // Rate limit: Slack allows ~50 requests per minute
         if (deleted % 40 === 0) {
+          await updateProgress(`🗑️ Deleting... ${deleted}/${duplicates.length}`);
           await new Promise(r => setTimeout(r, 2000));
         }
       }
 
-      await app.client.chat.postMessage({
-        channel: channelId,
-        text: `🧹 Cleanup complete!\n• Scanned: ${allMessages.length} messages (${threadsToFetch.length} threads)\n• Found: ${duplicates.length} duplicates\n• Deleted: ${deleted}\n• Failed: ${failed}`
-      });
+      await updateProgress(`🧹 Cleanup complete!\n• Scanned: ${allMessages.length} messages (${threadsToFetch.length} threads)\n• Found: ${duplicates.length} duplicates\n• Deleted: ${deleted}\n• Failed: ${failed}`);
 
     } catch (error) {
       console.error('[CLEANUP] Error:', error.message);
-      await app.client.chat.postMessage({
-        channel: channelId,
-        text: `:x: Cleanup failed: ${error.message}`
-      });
+      await updateProgress(`:x: Cleanup failed: ${error.message}`);
     }
   });
 });
