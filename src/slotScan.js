@@ -402,6 +402,7 @@ async function runSlotScan(slackApp) {
 
     await slackApp.client.chat.postMessage({
       channel: SCAN_CHANNEL_ID,
+      thread_ts: startMsg.ts,
       text: resultsText
     });
 
