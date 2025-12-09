@@ -1110,38 +1110,42 @@ app.command('/cleanup-duplicates', async ({ command, ack, respond }) => {
         await new Promise(r => setTimeout(r, 200));
       }
 
-      // Filter to only bot messages with SMS content
-      const botMessages = allMessages.filter(m =>
-        m.bot_id && m.text && (m.text.includes('New SMS') || m.text.includes('📥'))
-      );
+      // Filter to bot messages (more lenient - any bot message)
+      const botMessages = allMessages.filter(m => m.bot_id && m.text);
 
-      // Extract core SMS content for comparison (ignore metadata like bank/slot)
+      // Extract the core content for comparison
+      // Strips out variable metadata (bank IDs, slots, timestamps) to find true duplicates
       function extractSmsKey(text) {
-        // Extract "From: (XXX) XXX-XXXX" phone
-        const fromMatch = text.match(/From:\s*\(?(\d{3})\)?\s*(\d{3})[- ]?(\d{4})/);
-        const fromPhone = fromMatch ? `${fromMatch[1]}${fromMatch[2]}${fromMatch[3]}` : '';
-
-        // Extract recipient phone from "New SMS to XXX" or header
-        const toMatch = text.match(/to\s+([^*\n]+)\*?\s*·\s*\(?(\d{3})\)?[- ]?(\d{3})[- ]?(\d{4})/) ||
-                       text.match(/to\s*\(?(\d{3})\)?[- ]?(\d{3})[- ]?(\d{4})/);
-        const toPhone = toMatch ? (toMatch[2] ? `${toMatch[2]}${toMatch[3]}${toMatch[4]}` : `${toMatch[1]}${toMatch[2]}${toMatch[3]}`) : '';
-
-        // Extract quoted content - the actual SMS message
-        const contentMatch = text.match(/"([^"]+)"/);
+        // Try multiple quote styles: straight ", curly "", and single '
+        const contentMatch = text.match(/"([^"]+)"/) ||
+                            text.match(/"([^"]+)"/) ||
+                            text.match(/'([^']+)'/);
         const content = contentMatch ? contentMatch[1].trim() : '';
 
-        return `${fromPhone}|${toPhone}|${content}`;
+        // Extract phone numbers from the text
+        const phoneMatches = text.match(/\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g) || [];
+        const phones = phoneMatches.map(p => p.replace(/\D/g, '')).slice(0, 2).sort().join('|');
+
+        if (content && content.length > 5) {
+          return `${phones}|${content}`;
+        }
+
+        // Fallback: normalize the text by removing variable parts
+        return text
+          .replace(/\d+\.\d+/g, 'SLOT') // Slot numbers like 28.03
+          .replace(/5001[24]/g, 'BANK') // Bank IDs
+          .replace(/@SalemAI\s+reply\s+\S+\s+\S+/g, 'REPLY') // Reply instructions
+          .replace(/·/g, '|')
+          .trim();
       }
 
-      // Group by SMS content (not full message text)
-      const seen = new Map(); // key -> first message
+      // Group by SMS content
+      const seen = new Map();
       const duplicates = [];
 
       for (const msg of botMessages.sort((a, b) => parseFloat(a.ts) - parseFloat(b.ts))) {
         const smsKey = extractSmsKey(msg.text);
-
-        // Skip if we couldn't extract meaningful content
-        if (!smsKey || smsKey === '||') continue;
+        if (!smsKey || smsKey.length < 10) continue;
 
         const hash = crypto.createHash('md5').update(smsKey).digest('hex');
 
@@ -1155,7 +1159,7 @@ app.command('/cleanup-duplicates', async ({ command, ack, respond }) => {
       if (duplicates.length === 0) {
         await app.client.chat.postMessage({
           channel: channelId,
-          text: `✅ No duplicates found in the last ${hours} hours (scanned ${allMessages.length} messages, ${threadsToFetch.length} threads).`
+          text: `✅ No duplicates found in the last ${hours} hours.\n• Scanned: ${allMessages.length} messages (${threadsToFetch.length} threads)\n• Bot messages checked: ${botMessages.length}`
         });
         return;
       }
