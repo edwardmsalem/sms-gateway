@@ -1214,7 +1214,8 @@ app.command('/cleanup-duplicates', async ({ command, ack, respond }) => {
 
       await updateProgress(`🗑️ Found ${duplicates.length} duplicates. Deleting...`);
 
-      // Delete duplicates
+      // Delete duplicates with careful rate limiting
+      // Slack allows ~50 requests/min for chat.delete (Tier 3)
       let deleted = 0;
       let failed = 0;
 
@@ -1225,15 +1226,17 @@ app.command('/cleanup-duplicates', async ({ command, ack, respond }) => {
             ts: msg.ts
           });
           deleted++;
+
+          // Small delay after each deletion to stay under rate limit
+          await new Promise(r => setTimeout(r, 1200)); // ~50/min
         } catch (err) {
           console.error(`[CLEANUP] Failed to delete ${msg.ts}: ${err.message}`);
           failed++;
         }
 
-        // Rate limit: Slack allows ~50 requests per minute
-        if (deleted % 40 === 0) {
-          await updateProgress(`🗑️ Deleting... ${deleted}/${duplicates.length}`);
-          await new Promise(r => setTimeout(r, 2000));
+        // Progress update every 10 deletions
+        if ((deleted + failed) % 10 === 0) {
+          await updateProgress(`🗑️ Deleting... ${deleted}/${duplicates.length} (${failed} failed)`);
         }
       }
 
