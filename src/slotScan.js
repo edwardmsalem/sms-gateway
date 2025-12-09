@@ -126,14 +126,14 @@ async function verifySlotActivation(bank, slotPosition) {
     });
 
     if (!response.ok) {
-      return { error: `HTTP ${response.status}`, activeCount: 0, totalPorts: 0, simPresent: 0, noSim: 0 };
+      return { error: `HTTP ${response.status}`, activeCount: 0, totalPorts: 0, simPresent: 0, noSim: 0, emptySlots: [] };
     }
 
     const data = await response.json();
     const statusArray = data.status || data;
 
     if (!Array.isArray(statusArray)) {
-      return { error: 'Invalid response format', activeCount: 0, totalPorts: 0, simPresent: 0, noSim: 0 };
+      return { error: 'Invalid response format', activeCount: 0, totalPorts: 0, simPresent: 0, noSim: 0, emptySlots: [] };
     }
 
     // Count ports where active=1 and slot matches expected position
@@ -143,11 +143,13 @@ async function verifySlotActivation(bank, slotPosition) {
     let noSim = 0;
     let registered = 0;
     const portDetails = [];
+    const emptySlots = []; // Track which slots have no SIM (by ICCID)
 
     for (const slot of statusArray) {
       const port = String(slot.port || '');
       const isActive = slot.active === 1 || slot.active === '1';
       const st = parseInt(slot.st, 10);
+      const iccid = slot.iccid || '';
 
       // Check if this port's slot matches expected (e.g., "35.04" should have .04 for slot 4)
       const slotSuffix = port.split('.')[1];
@@ -156,17 +158,21 @@ async function verifySlotActivation(bank, slotPosition) {
       if (isActive) activeCount++;
       if (isActive && isCorrectSlot) correctSlotCount++;
 
-      // Count SIM presence
-      if (st === 0) {
-        noSim++;
-      } else {
+      // Count SIM presence - use ICCID as primary indicator (more reliable than st===0)
+      const hasSimCard = iccid && iccid.length > 0;
+      if (hasSimCard) {
         simPresent++;
         if (st === 3) registered++;
+      } else {
+        noSim++;
+        // Extract port number for empty slot tracking
+        const portNum = port.split('.')[0];
+        if (portNum) emptySlots.push(portNum);
       }
 
       // Sample some ports for logging
       if (portDetails.length < 5 && isActive) {
-        portDetails.push(`${port}(st=${st})`);
+        portDetails.push(`${port}(st=${st},iccid=${iccid ? 'yes' : 'no'})`);
       }
     }
 
@@ -177,10 +183,11 @@ async function verifySlotActivation(bank, slotPosition) {
       samplePorts: portDetails,
       simPresent,
       noSim,
-      registered
+      registered,
+      emptySlots
     };
   } catch (err) {
-    return { error: err.message, activeCount: 0, totalPorts: 0, simPresent: 0, noSim: 0 };
+    return { error: err.message, activeCount: 0, totalPorts: 0, simPresent: 0, noSim: 0, emptySlots: [] };
   }
 }
 
@@ -273,6 +280,7 @@ async function runSlotScan(slackApp) {
       let totalSimPresent = 0;
       let totalNoSim = 0;
       let totalRegistered = 0;
+      const allEmptySlots = {};
 
       for (const v of verificationResults) {
         if (v.error) {
@@ -280,7 +288,15 @@ async function runSlotScan(slackApp) {
         } else {
           const icon = v.correctSlotCount > 0 ? '✅' : '⚠️';
           verifyStatus += `\n• Bank ${v.bankId}: ${icon} ${v.correctSlotCount} ports on .${slotStr}, ${v.activeCount} total active`;
-          verifyStatus += `\n  📶 SIMs: ${v.simPresent} present (${v.registered} registered), ${v.noSim} empty`;
+          verifyStatus += `\n  📶 SIMs (by ICCID): ${v.simPresent} present (${v.registered} registered), ${v.noSim} empty`;
+          if (v.emptySlots && v.emptySlots.length > 0) {
+            // Show which ports have no SIM
+            const emptyList = v.emptySlots.length <= 10
+              ? v.emptySlots.join(', ')
+              : `${v.emptySlots.slice(0, 10).join(', ')}... +${v.emptySlots.length - 10} more`;
+            verifyStatus += `\n  ❌ Empty ports: ${emptyList}`;
+            allEmptySlots[v.bankId] = v.emptySlots;
+          }
           if (v.samplePorts.length > 0) {
             verifyStatus += `\n  Sample: ${v.samplePorts.join(', ')}`;
           }
@@ -290,9 +306,9 @@ async function runSlotScan(slackApp) {
         }
       }
 
-      // Store SIM stats for final summary
+      // Store SIM stats for final summary (only on first slot - counts don't change)
       if (!activeScan.simStats) {
-        activeScan.simStats = { simPresent: totalSimPresent, noSim: totalNoSim, registered: totalRegistered };
+        activeScan.simStats = { simPresent: totalSimPresent, noSim: totalNoSim, registered: totalRegistered, emptySlots: allEmptySlots };
       }
 
       // Update with switch + verification results
@@ -341,10 +357,22 @@ async function runSlotScan(slackApp) {
 
     // Include SIM stats
     if (activeScan.simStats) {
-      const { simPresent, noSim, registered } = activeScan.simStats;
-      resultsText += `\n*SIM Card Status:*\n`;
+      const { simPresent, noSim, registered, emptySlots } = activeScan.simStats;
+      resultsText += `\n*SIM Card Status (by ICCID):*\n`;
       resultsText += `• 📶 SIMs present: ${simPresent} (${registered} registered/ready)\n`;
       resultsText += `• ❌ Empty slots: ${noSim}\n`;
+
+      // List empty ports per bank
+      if (emptySlots && Object.keys(emptySlots).length > 0) {
+        for (const [bankId, ports] of Object.entries(emptySlots)) {
+          if (ports.length > 0) {
+            const portList = ports.length <= 15
+              ? ports.join(', ')
+              : `${ports.slice(0, 15).join(', ')}... +${ports.length - 15} more`;
+            resultsText += `  Bank ${bankId} empty: ${portList}\n`;
+          }
+        }
+      }
     }
 
     resultsText += `\n*Results by slot position:*\n`;
