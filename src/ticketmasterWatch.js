@@ -178,26 +178,6 @@ function getActiveWatch(phone) {
 }
 
 /**
- * Find the slot for a phone number from recent conversations
- * @param {string} phone - Phone number to look up
- * @returns {{bankId: string, slot: string}|null}
- */
-function findSlotByPhone(phone) {
-  const normalized = normalizePhone(phone);
-  // Look for conversations where this phone is the recipient (our SIM number)
-  const conversation = db.findConversationByRecipient(normalized);
-
-  if (conversation && conversation.sim_bank_id && conversation.sim_port) {
-    return {
-      bankId: conversation.sim_bank_id,
-      slot: conversation.sim_port
-    };
-  }
-
-  return null;
-}
-
-/**
  * Post a message to a Slack thread
  */
 async function postToThread(slackApp, channel, threadTs, message) {
@@ -297,124 +277,6 @@ async function startTextchestPolling(slackApp, watch, number) {
 
   // Store interval reference for cleanup
   watch.pollInterval = pollInterval;
-}
-
-/**
- * Start a Ticketmaster code watch for an email
- * @param {object} slackApp - Slack Bolt app instance
- * @param {string} email - Email address to search for
- * @param {string} slackChannel - Slack channel ID
- * @param {string} threadTs - Thread timestamp for replies
- */
-async function startTicketmasterWatch(slackApp, email, slackChannel, threadTs) {
-  try {
-    const associate = await monday.searchAssociateByEmail(email);
-
-    if (associate) {
-      const phoneDisplay = formatPhoneDisplay(associate.phone);
-      await postToThread(slackApp, slackChannel, threadTs,
-        getMessage('foundNumber', phoneDisplay));
-
-      const slotInfo = findSlotByPhone(associate.phone);
-
-      if (slotInfo) {
-        const bank = db.getSimBank(slotInfo.bankId);
-        if (bank) {
-          try {
-            await simbank.activateSlot(bank, slotInfo.slot);
-            await postToThread(slackApp, slackChannel, threadTs,
-              getMessage('activated', slotInfo.slot));
-          } catch (err) {
-            await postToThread(slackApp, slackChannel, threadTs,
-              getMessage('activationFailed'));
-          }
-        }
-      }
-
-      // Create watch for Ejoin webhook
-      const normalized = normalizePhone(associate.phone);
-      activeWatches.set(normalized, {
-        endTime: Date.now() + WATCH_DURATION_MS,
-        threadTs,
-        slackChannel,
-        source: 'ejoin',
-        email,
-        associateName: associate.name,
-        codesDelivered: false
-      });
-
-      // Opening line
-      await postToThread(slackApp, slackChannel, threadTs,
-        getMessage('watchStart', email));
-
-      // Set cleanup timer
-      setTimeout(() => {
-        const watch = activeWatches.get(normalized);
-        if (watch && Date.now() >= watch.endTime) {
-          activeWatches.delete(normalized);
-          const endMsg = watch.codesDelivered
-            ? getMessage('watchCompleteSuccess')
-            : getMessage('watchCompleteEmpty');
-          postToThread(slackApp, slackChannel, threadTs, endMsg).catch(console.error);
-        }
-      }, WATCH_DURATION_MS);
-
-      console.log(`[TM WATCH] Started Ejoin watch for ${phoneDisplay}`);
-      return;
-    }
-
-    // Step 2: Not found in Monday, search Textchest
-
-    const textchestNumber = await textchest.findNumberByEmail(email);
-
-    if (textchestNumber) {
-      const phoneDisplay = formatPhoneDisplay(textchestNumber.number);
-      await postToThread(slackApp, slackChannel, threadTs,
-        getMessage('foundNumber', phoneDisplay));
-
-      // Restart the SIM
-      try {
-        const activateResult = await textchest.activateSim(textchestNumber.number);
-        await postToThread(slackApp, slackChannel, threadTs,
-          getMessage('activated', activateResult.slot));
-      } catch (err) {
-        await postToThread(slackApp, slackChannel, threadTs,
-          getMessage('activationFailed'));
-      }
-
-      // Create watch for Textchest polling
-      const normalized = normalizePhone(textchestNumber.number);
-      const watch = {
-        endTime: Date.now() + WATCH_DURATION_MS,
-        threadTs,
-        slackChannel,
-        source: 'textchest',
-        email,
-        postedMessages: new Set(),
-        codesDelivered: false
-      };
-      activeWatches.set(normalized, watch);
-
-      // Opening line
-      await postToThread(slackApp, slackChannel, threadTs,
-        getMessage('watchStart', email));
-
-      // Start polling
-      await startTextchestPolling(slackApp, watch, textchestNumber.number);
-
-      console.log(`[TM WATCH] Started Textchest watch for ${phoneDisplay}`);
-      return;
-    }
-
-    // Not found anywhere
-    await postToThread(slackApp, slackChannel, threadTs,
-      getMessage('notFound', email));
-
-  } catch (error) {
-    console.error('[TM WATCH] Error:', error.message);
-    await postToThread(slackApp, slackChannel, threadTs,
-      `❌ Error: ${error.message}`);
-  }
 }
 
 /**
@@ -611,8 +473,6 @@ async function startTextchestWatch(slackApp, email, slackChannel, threadTs) {
           getMessage('activationFailed'));
       }
     } else {
-      // Step 2: Try Monday.com for SS number
-      const associate = await monday.searchAssociateByEmail(email);
       // Step 2: Try Monday.com for SS number (Associates board)
       await postToThread(slackApp, slackChannel, threadTs,
         `Not in Textchest. Checking Monday.com...`);
@@ -640,9 +500,8 @@ async function startTextchestWatch(slackApp, email, slackChannel, threadTs) {
 
         if (slotInfo) {
           smsSource = 'ss';
-          watchKey = normalizePhone(associate.phone);
-          slotId = `${slotInfo.bankId}-${slotInfo.slot}`;
           watchKey = normalizePhone(foundRecord.phone);
+          slotId = `${slotInfo.bankId}-${slotInfo.slot}`;
 
           await postToThread(slackApp, slackChannel, threadTs,
             getMessage('foundNumber', phoneDisplay));
@@ -722,7 +581,6 @@ async function startTextchestWatch(slackApp, email, slackChannel, threadTs) {
 }
 
 module.exports = {
-  startTicketmasterWatch,
   startTextchestWatch,
   checkWatchAndNotify,
   hasActiveWatch,
