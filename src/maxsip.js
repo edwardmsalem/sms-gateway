@@ -1,4 +1,5 @@
 const { google } = require('googleapis');
+const crypto = require('crypto');
 const db = require('./database');
 const slack = require('./slack');
 const monday = require('./monday');
@@ -9,6 +10,38 @@ const { normalizePhone } = require('./utils');
 let gmail = null;
 let startupTimestamp = null; // Only process emails after this time
 const processedMessageIds = new Set(); // Track processed emails to prevent duplicates
+
+// Content-based deduplication (same as webhook.js)
+const recentMessages = new Map();
+const DEDUPE_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
+
+/**
+ * Check if message content is a duplicate (seen within dedupe window)
+ */
+function isDuplicateMessage(sender, recipient, content) {
+  const data = `${sender}|${recipient}|${content}`;
+  const key = crypto.createHash('md5').update(data).digest('hex');
+  const now = Date.now();
+
+  // Clean up old entries periodically
+  if (recentMessages.size > 100) {
+    for (const [k, timestamp] of recentMessages) {
+      if (now - timestamp > DEDUPE_WINDOW_MS) {
+        recentMessages.delete(k);
+      }
+    }
+  }
+
+  if (recentMessages.has(key)) {
+    const lastSeen = recentMessages.get(key);
+    if (now - lastSeen < DEDUPE_WINDOW_MS) {
+      return true;
+    }
+  }
+
+  recentMessages.set(key, now);
+  return false;
+}
 
 /**
  * Initialize Gmail API client
@@ -204,6 +237,12 @@ async function processMaxsipEmail(message) {
     // Check if sender is blocked
     if (db.isNumberBlocked(normalizedSender)) {
       console.log(`[MAXSIP] Blocked sender: ${senderPhone}`);
+      return;
+    }
+
+    // Check for duplicate messages (same sender+recipient+content within 30 min)
+    if (isDuplicateMessage(normalizedSender, normalizedReceiver, content)) {
+      console.log(`[MAXSIP] Skipping duplicate message from ${senderPhone} to ${receiverPhone}`);
       return;
     }
 
