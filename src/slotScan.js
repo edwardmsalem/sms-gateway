@@ -6,11 +6,25 @@
 
 const db = require('./database');
 
-const TEST_CHANNEL_ID = 'C07JH0R8754';
+const SCAN_CHANNEL_ID = 'C0642U782JH';
 const SLOT_DURATION_MS = 3 * 60 * 1000; // 3 minutes per slot
 const TOTAL_SLOTS = 8; // Slots 01 through 08
 const PORTS_PER_BANK = 64;
 const VERIFICATION_DELAY_MS = 5000; // Wait 5 seconds before verifying
+
+// Port status meanings for better logging
+const PORT_STATUS = {
+  0: 'No SIM',
+  1: 'Idle',
+  2: 'Registering',
+  3: 'Ready',
+  4: 'In call',
+  5: 'Reg failed',
+  6: 'Low balance',
+  7: 'Locked',
+  8: 'Locked',
+  9: 'SIM error'
+};
 
 // Active scan state
 let activeScan = null;
@@ -53,7 +67,9 @@ async function switchBankToSlot(bank, slotPosition) {
 
   const switchUrl = `http://${bank.ip_address}:${bank.port}/goip_send_cmd.html?username=${encodeURIComponent(bank.username)}&password=${encodeURIComponent(bank.password)}`;
 
-  const results = { success: 0, failed: 0 };
+  console.log(`[SLOT SCAN] Switching bank ${bank.bank_id} to slot .${slotStr} (${slots.length} ports)`);
+
+  const results = { success: 0, failed: 0, errors: [] };
 
   // Send switch commands in batches of 16 to avoid overwhelming the bank
   const batchSize = 16;
@@ -77,9 +93,17 @@ async function switchBankToSlot(bank, slotPosition) {
           results.success++;
         } else {
           results.failed++;
+          if (results.errors.length < 5) {
+            results.errors.push(`${slot}: HTTP ${res.status}`);
+          }
         }
       } catch (err) {
         results.failed++;
+        if (results.errors.length < 5) {
+          let errMsg = err.message;
+          if (err.name === 'AbortError') errMsg = 'timeout';
+          results.errors.push(`${slot}: ${errMsg}`);
+        }
       }
     });
 
@@ -96,7 +120,7 @@ async function switchBankToSlot(bank, slotPosition) {
 
 /**
  * Verify slot activation by checking status API
- * Returns count of ports with expected slot active
+ * Returns detailed counts including SIM presence
  * @param {object} bank - Bank config
  * @param {number} slotPosition - Expected slot position (1-8)
  */
@@ -106,30 +130,50 @@ async function verifySlotActivation(bank, slotPosition) {
   try {
     const url = `http://${bank.ip_address}:${bank.port}/goip_get_status.html?username=${encodeURIComponent(bank.username)}&password=${encodeURIComponent(bank.password)}&all_slots=1`;
 
+    console.log(`[SLOT SCAN] Verifying bank ${bank.bank_id} at ${bank.ip_address}:${bank.port}`);
+
     const response = await fetch(url, {
       method: 'GET',
       signal: AbortSignal.timeout(30000)
     });
 
     if (!response.ok) {
-      return { error: `HTTP ${response.status}`, activeCount: 0, totalPorts: 0 };
+      const errMsg = `HTTP ${response.status} ${response.statusText}`;
+      console.error(`[SLOT SCAN] Bank ${bank.bank_id} verification failed: ${errMsg}`);
+      return { error: errMsg, activeCount: 0, totalPorts: 0 };
     }
 
-    const data = await response.json();
+    let data;
+    const rawText = await response.text();
+    try {
+      data = JSON.parse(rawText);
+    } catch (parseErr) {
+      console.error(`[SLOT SCAN] Bank ${bank.bank_id} invalid JSON: ${rawText.substring(0, 200)}`);
+      return { error: 'Invalid JSON response', activeCount: 0, totalPorts: 0 };
+    }
+
     const statusArray = data.status || data;
 
     if (!Array.isArray(statusArray)) {
+      console.error(`[SLOT SCAN] Bank ${bank.bank_id} unexpected format:`, JSON.stringify(data).substring(0, 200));
       return { error: 'Invalid response format', activeCount: 0, totalPorts: 0 };
     }
 
-    // Count ports where active=1 and slot matches expected position
+    // Detailed slot analysis
     let activeCount = 0;
     let correctSlotCount = 0;
+    let withSimCount = 0;
+    let emptyCount = 0;
+    let readyCount = 0;
+    let errorCount = 0;
     const portDetails = [];
+    const errorPorts = [];
 
     for (const slot of statusArray) {
       const port = String(slot.port || '');
+      const st = parseInt(slot.st, 10);
       const isActive = slot.active === 1 || slot.active === '1';
+      const hasSim = slot.sn && slot.sn !== '' && slot.sn !== 'null';
 
       // Check if this port's slot matches expected (e.g., "35.04" should have .04 for slot 4)
       const slotSuffix = port.split('.')[1];
@@ -138,20 +182,51 @@ async function verifySlotActivation(bank, slotPosition) {
       if (isActive) activeCount++;
       if (isActive && isCorrectSlot) correctSlotCount++;
 
-      // Sample some ports for logging
-      if (portDetails.length < 5 && isActive) {
-        portDetails.push(`${port}(st=${slot.st})`);
+      // SIM presence detection
+      if (st === 0 || !hasSim) {
+        emptyCount++;
+      } else {
+        withSimCount++;
+        if (st === 3) {
+          readyCount++;
+        } else if (st === 5 || st === 6 || st === 9) {
+          errorCount++;
+          if (errorPorts.length < 5) {
+            errorPorts.push(`${port}(${PORT_STATUS[st] || 'st=' + st})`);
+          }
+        }
+      }
+
+      // Sample active ports for logging
+      if (portDetails.length < 5 && isActive && hasSim) {
+        portDetails.push(`${port}(${PORT_STATUS[st] || 'st=' + st})`);
       }
     }
+
+    console.log(`[SLOT SCAN] Bank ${bank.bank_id} slot .${slotStr}: ${correctSlotCount}/${activeCount} active, ${withSimCount} with SIM (${readyCount} ready, ${errorCount} errors), ${emptyCount} empty`);
 
     return {
       activeCount,
       correctSlotCount,
       totalPorts: statusArray.length,
-      samplePorts: portDetails
+      withSimCount,
+      emptyCount,
+      readyCount,
+      errorCount,
+      samplePorts: portDetails,
+      errorPorts
     };
   } catch (err) {
-    return { error: err.message, activeCount: 0, totalPorts: 0 };
+    let errMsg = err.message;
+    if (err.name === 'AbortError' || err.message.includes('timeout')) {
+      errMsg = 'Connection timeout (30s)';
+    } else if (err.code === 'ECONNREFUSED') {
+      errMsg = 'Connection refused - device offline?';
+    } else if (err.code === 'EHOSTUNREACH') {
+      errMsg = 'Host unreachable - network issue?';
+    }
+    console.error(`[SLOT SCAN] Bank ${bank.bank_id} verification error: ${errMsg}`);
+    return { error: errMsg, activeCount: 0, totalPorts: 0 };
   }
 }
 
@@ -182,7 +257,7 @@ async function runSlotScan(slackApp) {
   try {
     // Post start message
     const startMsg = await slackApp.client.chat.postMessage({
-      channel: TEST_CHANNEL_ID,
+      channel: SCAN_CHANNEL_ID,
       text: `🔄 *Slot Scan Starting*\n\nScanning ${banks.length} bank(s): ${banks.map(b => b.bank_id).join(', ')}\nCycling through slots 01-08, 3 minutes each\nTotal duration: ~24 minutes`
     });
 
@@ -196,7 +271,7 @@ async function runSlotScan(slackApp) {
 
       // Post slot start message
       await slackApp.client.chat.postMessage({
-        channel: TEST_CHANNEL_ID,
+        channel: SCAN_CHANNEL_ID,
         thread_ts: startMsg.ts,
         text: `⏱️ *Slot ${slotStr}* - Switching all ports...`
       });
@@ -211,7 +286,11 @@ async function runSlotScan(slackApp) {
           bankId: bank.bank_id,
           ...result
         });
-        console.log(`[SLOT SCAN] Bank ${bank.bank_id} slot ${slotStr}: ${result.success} success, ${result.failed} failed`);
+        let logMsg = `[SLOT SCAN] Bank ${bank.bank_id} slot ${slotStr}: ${result.success} success, ${result.failed} failed`;
+        if (result.errors && result.errors.length > 0) {
+          logMsg += ` | Errors: ${result.errors.join(', ')}`;
+        }
+        console.log(logMsg);
       }
 
       const switchTime = Math.round((Date.now() - switchStart) / 1000);
@@ -239,25 +318,42 @@ async function runSlotScan(slackApp) {
         console.log(`[SLOT SCAN] Bank ${bank.bank_id} verification: ${verify.correctSlotCount}/${verify.activeCount} active on slot ${slotStr}${verify.error ? ` (error: ${verify.error})` : ''}`);
       }
 
-      // Build verification status
+      // Build verification status with SIM presence info
       let verifyStatus = '';
+      let totalWithSim = 0;
+      let totalEmpty = 0;
+      let totalReady = 0;
+      let totalErrors = 0;
+
       for (const v of verificationResults) {
         if (v.error) {
-          verifyStatus += `\n• Bank ${v.bankId}: ⚠️ ${v.error}`;
+          verifyStatus += `\n• Bank ${v.bankId}: :x: ${v.error}`;
         } else {
-          const icon = v.correctSlotCount > 0 ? '✅' : '⚠️';
-          verifyStatus += `\n• Bank ${v.bankId}: ${icon} ${v.correctSlotCount} ports on .${slotStr}, ${v.activeCount} total active`;
-          if (v.samplePorts.length > 0) {
-            verifyStatus += ` (${v.samplePorts.join(', ')})`;
+          totalWithSim += v.withSimCount || 0;
+          totalEmpty += v.emptyCount || 0;
+          totalReady += v.readyCount || 0;
+          totalErrors += v.errorCount || 0;
+
+          const icon = v.readyCount > 0 ? ':white_check_mark:' : (v.withSimCount > 0 ? ':large_yellow_circle:' : ':black_circle:');
+          verifyStatus += `\n• Bank ${v.bankId}: ${icon} ${v.withSimCount} SIMs (${v.readyCount} ready`;
+          if (v.errorCount > 0) {
+            verifyStatus += `, ${v.errorCount} errors`;
+          }
+          verifyStatus += `), ${v.emptyCount} empty`;
+          if (v.errorPorts && v.errorPorts.length > 0) {
+            verifyStatus += `\n   :warning: Errors: ${v.errorPorts.join(', ')}`;
           }
         }
       }
 
+      // Summary line
+      const summaryLine = `*Summary:* ${totalWithSim} SIMs detected (${totalReady} ready, ${totalErrors} errors), ${totalEmpty} empty slots`;
+
       // Update with switch + verification results
       await slackApp.client.chat.postMessage({
-        channel: TEST_CHANNEL_ID,
+        channel: SCAN_CHANNEL_ID,
         thread_ts: startMsg.ts,
-        text: `✅ *Slot ${slotStr}* switched (${switchTime}s)\nCommands: ${totalSuccess} success, ${totalFailed} failed\n\n*Verification:*${verifyStatus}\n\n⏳ Waiting 3 minutes...`
+        text: `*Slot ${slotStr}* switched (${switchTime}s)\nCommands: ${totalSuccess} success, ${totalFailed} failed\n\n*Verification:*${verifyStatus}\n\n${summaryLine}\n\n:hourglass_flowing_sand: Waiting 3 minutes...`
       });
 
       // Wait for the slot duration
@@ -305,7 +401,7 @@ async function runSlotScan(slackApp) {
     resultsText += `• #verification: ${verificationCount}`;
 
     await slackApp.client.chat.postMessage({
-      channel: TEST_CHANNEL_ID,
+      channel: SCAN_CHANNEL_ID,
       text: resultsText
     });
 
@@ -339,5 +435,5 @@ module.exports = {
   getActiveScan,
   recordMessageArrival,
   stopScan,
-  TEST_CHANNEL_ID
+  SCAN_CHANNEL_ID
 };
