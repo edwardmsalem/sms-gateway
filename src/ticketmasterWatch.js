@@ -13,7 +13,6 @@ const monday = require('./monday');
 const simbank = require('./simbank');
 const textchest = require('./textchest');
 const { normalizePhone, formatPhoneDisplay } = require('./utils');
-const verificationScanner = require('./verificationScanner');
 
 // ============================================================================
 // BOT PERSONALITY - Message templates (never repeat same one twice in a row)
@@ -371,12 +370,121 @@ function cleanupExpiredWatches() {
 setInterval(cleanupExpiredWatches, 60 * 1000);
 
 /**
- * Poll Gmail for Ticketmaster emails to a specific email address
+ * Detect which service sent an email based on From header
+ * Returns { service: string, filterByEmail: boolean }
  */
-async function pollGmailForTicketmaster(slackApp, watch, email) {
+function detectEmailService(from, subject) {
+  const fromLower = from.toLowerCase();
+  const subjectLower = subject.toLowerCase();
+
+  // Microsoft/Outlook - DON'T filter by email (show all)
+  if (fromLower.includes('microsoft.com') || fromLower.includes('accountprotection')) {
+    return { service: 'Microsoft', filterByEmail: false };
+  }
+
+  // MLB
+  if (fromLower.includes('@mlb.com') || fromLower.includes('mlb.com')) {
+    return { service: 'MLB', filterByEmail: true };
+  }
+
+  // SeatGeek
+  if (fromLower.includes('@seatgeek.com') || fromLower.includes('seatgeek')) {
+    return { service: 'SeatGeek', filterByEmail: true };
+  }
+
+  // Ticketmaster
+  if (fromLower.includes('ticketmaster')) {
+    return { service: 'Ticketmaster', filterByEmail: true };
+  }
+
+  // AXS - DON'T filter by email (show all)
+  if (fromLower.includes('@axs.com') || fromLower.includes('axs')) {
+    return { service: 'AXS', filterByEmail: false };
+  }
+
+  // StubHub
+  if (fromLower.includes('stubhub')) {
+    return { service: 'StubHub', filterByEmail: true };
+  }
+
+  // Vivid Seats
+  if (fromLower.includes('vividseats')) {
+    return { service: 'Vivid Seats', filterByEmail: true };
+  }
+
+  // Google
+  if (fromLower.includes('google.com') || fromLower.includes('accounts.google')) {
+    return { service: 'Google', filterByEmail: true };
+  }
+
+  return { service: null, filterByEmail: true };
+}
+
+/**
+ * Extract verification code from email body
+ * Returns { code: string|null }
+ */
+function extractCodeFromEmail(body, service) {
+  // Service-specific patterns
+  const servicePatterns = {
+    'Microsoft': [
+      /Security code:\s*(\d{6})/i,
+      /security code is[:\s]*(\d{6})/i,
+    ],
+    'MLB': [
+      /verification code is[:\s]*(?:<[^>]*>)?(\d{6})/i,
+      /verification code[:\s]*(\d{6})/i,
+    ],
+    'SeatGeek': [
+      />(\d{6})</,  // Code in styled div
+      /verification code[\s\S]{0,100}?(\d{6})/i,
+    ],
+    'Ticketmaster': [
+      /authentication\s*code[:\s]*(\d{6})/i,
+      /reset\s*code[:\s]*(\d{6})/i,
+    ],
+    'Google': [
+      /G-(\d{6})/i,
+    ],
+  };
+
+  // Try service-specific patterns first
+  if (service && servicePatterns[service]) {
+    for (const pattern of servicePatterns[service]) {
+      const match = body.match(pattern);
+      if (match) return match[1];
+    }
+  }
+
+  // Generic patterns that work for most services
+  const genericPatterns = [
+    /authentication\s*code[:\s]*(\d{6})/i,
+    /reset\s*code[:\s]*(\d{6})/i,
+    /security\s*code[:\s]*(\d{6})/i,
+    /verification\s*code[:\s]*(\d{6})/i,
+    /your\s*code[:\s]*(\d{6})/i,
+    /code\s*is[:\s]*(\d{6})/i,
+    />(\d{6})</,  // Code in HTML tags
+  ];
+
+  for (const pattern of genericPatterns) {
+    const match = body.match(pattern);
+    if (match) return match[1];
+  }
+
+  // Fallback: look for any 6-digit number after "code" keyword
+  const fallbackMatch = body.match(/code[\s\S]{0,50}?(\d{6})/i);
+  return fallbackMatch ? fallbackMatch[1] : null;
+}
+
+/**
+ * Poll Gmail for verification emails from ALL services
+ * Searches for: Microsoft, MLB, SeatGeek, Ticketmaster, AXS, StubHub, Vivid Seats, Google
+ */
+async function pollGmailForVerificationCodes(slackApp, watch, email) {
   const gmailClient = getGmailClient();
   if (!gmailClient) {
-    console.log('[TM WATCH] Gmail not configured, skipping email monitoring');
+    console.log('[CODE WATCH] Gmail not configured, skipping email monitoring');
     return;
   }
 
@@ -388,18 +496,21 @@ async function pollGmailForTicketmaster(slackApp, watch, email) {
     }
 
     try {
-      // Search for Ticketmaster code emails:
-      // - TO or FROM this email address (direct emails)
-      // - OR containing this email address anywhere (forwarded emails)
-      // Subject patterns: "authentication code", "reset password", or forwarded versions "FW:"
-      // Only get emails from last 1 hour - older codes are irrelevant
+      // Search for verification emails from ALL supported services
+      // Query breakdown:
+      // - Subject patterns for verification/security/authentication codes
+      // - From known senders OR containing the target email
+      // - Only last 1 hour
+      const query = `(subject:"security code" OR subject:"verification code" OR subject:"authentication code" OR subject:"reset password" OR subject:"sign in" OR subject:"sign into") newer_than:1h`;
+
       const response = await gmailClient.users.messages.list({
         userId: 'me',
-        q: `("${email}" OR to:${email} OR from:${email}) (subject:"authentication code" OR subject:"reset password") newer_than:1h`,
-        maxResults: 10
+        q: query,
+        maxResults: 20
       });
 
       const messages = response.data.messages || [];
+      console.log(`[CODE WATCH] Gmail poll: ${messages.length} verification emails found`);
 
       for (const msg of messages) {
         // Skip if already posted
@@ -416,50 +527,59 @@ async function pollGmailForTicketmaster(slackApp, watch, email) {
         const headers = fullMessage.data.payload.headers;
         const subject = headers.find(h => h.name.toLowerCase() === 'subject')?.value || 'No subject';
         const from = headers.find(h => h.name.toLowerCase() === 'from')?.value || 'Unknown';
+        const to = headers.find(h => h.name.toLowerCase() === 'to')?.value || '';
+        const deliveredTo = headers.find(h => h.name.toLowerCase() === 'delivered-to')?.value || '';
 
-        // Extract body
+        // Detect service
+        const { service, filterByEmail } = detectEmailService(from, subject);
+
+        // Check if email matches target (unless service doesn't filter)
+        const emailLower = email.toLowerCase();
+        const emailMatches = !filterByEmail ||
+          to.toLowerCase().includes(emailLower) ||
+          deliveredTo.toLowerCase().includes(emailLower) ||
+          subject.toLowerCase().includes(emailLower);
+
+        if (!emailMatches) {
+          console.log(`[CODE WATCH] Skipping ${service || 'unknown'} email - doesn't match ${email}`);
+          continue;
+        }
+
+        // Extract body (handle multipart)
         let body = '';
         const payload = fullMessage.data.payload;
         if (payload.body?.data) {
           body = Buffer.from(payload.body.data, 'base64').toString('utf8');
         } else if (payload.parts) {
+          // Try text/plain first, then text/html
           const textPart = payload.parts.find(p => p.mimeType === 'text/plain');
+          const htmlPart = payload.parts.find(p => p.mimeType === 'text/html');
           if (textPart?.body?.data) {
             body = Buffer.from(textPart.body.data, 'base64').toString('utf8');
+          } else if (htmlPart?.body?.data) {
+            body = Buffer.from(htmlPart.body.data, 'base64').toString('utf8');
           }
         }
 
-        // Extract Ticketmaster authentication/reset code
-        // Authentication emails: "Your Authentication Code:\n594137"
-        // Password reset emails: "Your Reset Code:\n026502"
-        let code = null;
-        const patterns = [
-          /authentication\s*code[:\s]*(\d{6})/i,
-          /reset\s*code[:\s]*(\d{6})/i,
-          /your\s*code[:\s]*(\d{6})/i,
-          /verification\s*code[:\s]*(\d{6})/i,
-          /code\s*is[:\s]*(\d{6})/i,
-        ];
-        for (const pattern of patterns) {
-          const match = body.match(pattern);
-          if (match) {
-            code = match[1];
-            break;
-          }
-        }
-        // Fallback: look for any 6-digit number after "code" keyword
-        if (!code) {
-          const fallbackMatch = body.match(/code[\s\S]{0,50}?(\d{6})/i);
-          code = fallbackMatch ? fallbackMatch[1] : null;
-        }
+        // Extract code
+        const code = extractCodeFromEmail(body, service);
 
         watch.postedEmails.add(msg.id);
 
         // Post code if found
         if (code) {
           watch.codesDelivered = true;
-          await postToThread(slackApp, watch.slackChannel, watch.threadTs,
-            getMessage('codeFound', code));
+
+          if (!filterByEmail) {
+            // Microsoft/AXS - show with disclaimer
+            await postToThread(slackApp, watch.slackChannel, watch.threadTs,
+              `📬 *${code}* (${service}) — may not be for this email`);
+          } else {
+            await postToThread(slackApp, watch.slackChannel, watch.threadTs,
+              getMessage('codeFound', code, service));
+          }
+
+          console.log(`[CODE WATCH] Found ${service || 'unknown'} code: ${code}`);
         }
 
         // Mark as read
@@ -470,7 +590,7 @@ async function pollGmailForTicketmaster(slackApp, watch, email) {
         });
       }
     } catch (err) {
-      console.error('[TM WATCH] Gmail poll error:', err.message);
+      console.error('[CODE WATCH] Gmail poll error:', err.message);
     }
   }, POLL_INTERVAL_MS);
 
@@ -478,9 +598,12 @@ async function pollGmailForTicketmaster(slackApp, watch, email) {
   watch.gmailPollInterval = pollInterval;
 }
 
+// Keep old function name for compatibility
+const pollGmailForTicketmaster = pollGmailForVerificationCodes;
+
 /**
  * Start a verification code watch
- * Monitors: Slack verification channel (forwarded emails) + SMS (Textchest/SIM banks)
+ * Monitors: Gmail (all verification services) + SMS (Textchest/SIM banks)
  * @param {object} slackApp - Slack Bolt app instance
  * @param {string} email - Email address to search for
  * @param {string} slackChannel - Slack channel ID
@@ -493,39 +616,7 @@ async function startTextchestWatch(slackApp, email, slackChannel, threadTs) {
     let watchKey = email;
     let slotId = null;
 
-    // Step 1: Immediately scan the verification channel for existing codes
-    await postToThread(slackApp, slackChannel, threadTs,
-      `Scanning for existing codes...`);
-
-    const existingCodes = await verificationScanner.scanChannelForCodes(
-      slackApp.client,
-      email,
-      { maxAge: 3600, includeAllMicrosoft: true } // Last hour
-    );
-
-    if (existingCodes.length > 0) {
-      // Group codes by shared vs matched
-      const sharedCodes = existingCodes.filter(c => c.isSharedCode);
-      const matchedCodes = existingCodes.filter(c => !c.isSharedCode);
-
-      // Post matched codes first
-      for (const result of matchedCodes) {
-        await postToThread(slackApp, slackChannel, threadTs,
-          getMessage('codeFound', result.code, result.service));
-      }
-
-      // Post shared codes with disclaimer
-      if (sharedCodes.length > 0) {
-        await postToThread(slackApp, slackChannel, threadTs,
-          `📬 Found ${sharedCodes.length} recent code${sharedCodes.length > 1 ? 's' : ''} (may not be for this email):`);
-        for (const result of sharedCodes) {
-          await postToThread(slackApp, slackChannel, threadTs,
-            `*${result.code}* (${result.service})`);
-        }
-      }
-    }
-
-    // Step 2: Try Textchest for SMS
+    // Step 1: Try Textchest for SMS
     const textchestNumber = await textchest.findNumberByEmail(email);
 
     if (textchestNumber) {
@@ -547,14 +638,14 @@ async function startTextchestWatch(slackApp, email, slackChannel, threadTs) {
           getMessage('activationFailed'));
       }
     } else {
-      // Step 3: Try Monday.com for SS number (Associates board)
+      // Step 2: Try Monday.com for SS number (Associates board)
       await postToThread(slackApp, slackChannel, threadTs,
         `Not in Textchest. Checking Monday.com...`);
 
       let foundRecord = await monday.searchAssociateByEmail(email);
       let recordSource = 'associate';
 
-      // Step 4: If not in Associates, try External Emails board
+      // Step 3: If not in Associates, try External Emails board
       if (!foundRecord) {
         foundRecord = await monday.searchExternalByEmail(email);
         recordSource = 'external';
@@ -595,7 +686,7 @@ async function startTextchestWatch(slackApp, email, slackChannel, threadTs) {
         }
       } else {
         await postToThread(slackApp, slackChannel, threadTs,
-          `Not found in Monday.com. Watching email channel only.`);
+          `Not found in Monday.com. Watching Gmail only.`);
       }
     }
 
@@ -607,8 +698,8 @@ async function startTextchestWatch(slackApp, email, slackChannel, threadTs) {
       source: smsSource || 'email-only',
       email,
       postedMessages: new Set(),
-      postedCodes: new Set(existingCodes.map(c => `${c.service}:${c.code}`)),
-      codesDelivered: existingCodes.length > 0
+      postedEmails: new Set(),
+      codesDelivered: false
     };
     activeWatches.set(watchKey, watch);
 
@@ -617,32 +708,8 @@ async function startTextchestWatch(slackApp, email, slackChannel, threadTs) {
       await startTextchestPolling(slackApp, watch, textchestNumber.number);
     }
 
-    // Start channel polling for new email codes
-    const channelWatch = verificationScanner.startChannelWatch(
-      slackApp.client,
-      email,
-      async (result) => {
-        const codeKey = `${result.service}:${result.code}`;
-        if (!watch.postedCodes.has(codeKey)) {
-          watch.postedCodes.add(codeKey);
-          watch.codesDelivered = true;
-
-          if (result.isSharedCode) {
-            // Shared codes (Microsoft, AXS) - add disclaimer
-            await postToThread(slackApp, slackChannel, threadTs,
-              `📬 *${result.code}* (${result.service}) — may not be for this email`);
-          } else {
-            await postToThread(slackApp, slackChannel, threadTs,
-              getMessage('codeFound', result.code, result.service));
-          }
-        }
-      },
-      { duration: WATCH_DURATION_MS, includeAllMicrosoft: true }
-    );
-    watch.channelWatch = channelWatch;
-
-    // Also start Gmail polling as backup (if configured)
-    pollGmailForTicketmaster(slackApp, watch, email);
+    // Start Gmail polling for all verification services
+    pollGmailForVerificationCodes(slackApp, watch, email);
 
     // Opening line
     await postToThread(slackApp, slackChannel, threadTs,
@@ -654,7 +721,6 @@ async function startTextchestWatch(slackApp, email, slackChannel, threadTs) {
       if (w && Date.now() >= w.endTime) {
         if (w.pollInterval) clearInterval(w.pollInterval);
         if (w.gmailPollInterval) clearInterval(w.gmailPollInterval);
-        if (w.channelWatch) w.channelWatch.stop();
         activeWatches.delete(watchKey);
         const endMsg = w.codesDelivered
           ? getMessage('watchCompleteSuccess')
@@ -663,7 +729,7 @@ async function startTextchestWatch(slackApp, email, slackChannel, threadTs) {
       }
     }, WATCH_DURATION_MS);
 
-    console.log(`[CODE WATCH] Started watch for ${email}: SMS=${smsSource || 'none'}, Channel=yes, Gmail=yes`);
+    console.log(`[CODE WATCH] Started watch for ${email}: SMS=${smsSource || 'none'}, Gmail=yes`);
 
   } catch (error) {
     console.error('[CODE WATCH] Error:', error.message);
