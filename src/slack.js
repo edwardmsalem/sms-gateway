@@ -1040,7 +1040,7 @@ app.command('/status', async ({ command, ack, respond }) => {
 /**
  * /sweep-test command handler
  * Switches all 64 ports to slot 03 and tracks message arrivals
- * Usage: /sweep-test
+ * Usage: /sweep-test <bank_id>
  */
 app.command('/sweep-test', async ({ command, ack, respond }) => {
   // Acknowledge immediately to avoid Slack timeout
@@ -1055,14 +1055,37 @@ app.command('/sweep-test', async ({ command, ack, respond }) => {
     return;
   }
 
+  // Parse bank ID from command text
+  const bankId = command.text?.trim();
+  if (!bankId) {
+    const banks = db.getAllSimBanks();
+    const bankList = banks.map(b => b.bank_id).join(', ');
+    respond({
+      response_type: 'ephemeral',
+      text: `Usage: \`/sweep-test <bank_id>\`\nAvailable banks: ${bankList || 'none configured'}`
+    });
+    return;
+  }
+
+  // Verify bank exists
+  const bank = db.getSimBank(bankId);
+  if (!bank) {
+    const banks = db.getAllSimBanks();
+    const bankList = banks.map(b => b.bank_id).join(', ');
+    respond({
+      response_type: 'ephemeral',
+      text: `Bank ${bankId} not found.\nAvailable banks: ${bankList || 'none configured'}`
+    });
+    return;
+  }
+
   // Respond immediately - don't await
   respond({
     response_type: 'ephemeral',
-    text: `🧪 Sweep test starting...`
+    text: `🧪 Sweep test starting for bank ${bankId}...`
   });
 
   // Run the test fully asynchronously in the background
-  const bankId = '50004';
   setImmediate(() => {
     sweepTest.runSweepTest(app, bankId).catch(error => {
       console.error('Sweep test failed:', error.message);
