@@ -273,7 +273,7 @@ async function startTextchestPolling(slackApp, watch, number) {
           const codeMatch = content.match(/\d{6}/);
           const code = codeMatch ? codeMatch[0] : content;
           await postToThread(slackApp, watch.slackChannel, watch.threadTs,
-            getMessage('codeFound', code));
+            `📱 ${getMessage('codeFound', code, 'Ticketmaster')}`);
         }
       }
     } catch (err) {
@@ -306,7 +306,7 @@ async function checkWatchAndNotify(recipientPhone, senderPhone, content, slackAp
     watch.codesDelivered = true;
     const code = parsed.code || content;
     await postToThread(slackApp, watch.slackChannel, watch.threadTs,
-      getMessage('codeFound', code, parsed.service));
+      `📱 ${getMessage('codeFound', code, parsed.service)}`);
     console.log(`[CODE WATCH] ${parsed.service || 'Verification'} code detected for ${recipientPhone}: ${code}`);
     return true;
   } catch (err) {
@@ -580,7 +580,7 @@ async function pollGmailForVerificationCodes(slackApp, watch, email) {
           if (code) {
             watch.codesDelivered = true;
             await postToThread(slackApp, watch.slackChannel, watch.threadTs,
-              getMessage('codeFound', code, service));
+              `📧 ${getMessage('codeFound', code, service)}`);
             console.log(`[CODE WATCH] Found ${service || 'unknown'} code: ${code}`);
           }
         }
