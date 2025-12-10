@@ -580,15 +580,15 @@ app.event('app_mention', async ({ event, say }) => {
     return;
   }
 
-  // Check if this is a verification code watch: @Salem AI code <email>
-  if (parts[0]?.toLowerCase() === 'code') {
+  // Check if this is a verification code watch: @Salem AI code <email> or @Salem AI tm <email>
+  if (parts[0]?.toLowerCase() === 'code' || parts[0]?.toLowerCase() === 'tm') {
     // Extract email - Slack auto-links as <mailto:user@example.com|user@example.com>
-    const restOfText = fullText.replace(/^code\s+/i, '');
+    const restOfText = fullText.replace(/^(code|tm)\s+/i, '');
     const emailMatch = restOfText.match(/<mailto:([^|]+)\|[^>]+>/) || restOfText.match(/^([^\s@]+@[^\s@]+\.[^\s@]+)$/i);
 
     if (!emailMatch) {
       await say({
-        text: 'Usage: `@Salem AI code <email>`\nExample: `@Salem AI code user@example.com`',
+        text: 'Usage: `@Salem AI code <email>` or `@Salem AI tm <email>`\nExample: `@Salem AI code user@example.com`',
         thread_ts: event.thread_ts || event.ts
       });
       return;
@@ -802,7 +802,7 @@ app.event('app_mention', async ({ event, say }) => {
 
   // Default: show help message for unrecognized commands
   await say({
-    text: `*@Salem AI Commands:*\n• \`@Salem AI code <email>\` - Watch for verification codes\n• \`@Salem AI scan\` - Run slot scan (cycles slots 01-08)\n• \`@Salem AI reply <bank> <slot> <message>\` - Send SMS reply (in thread)\n• \`@Salem AI status <bank> <slot>\` - Check SIM slot status`,
+    text: `*@Salem AI Commands:*\n• \`@Salem AI code <email>\` or \`tm <email>\` - Watch for verification codes\n• \`@Salem AI scan\` - Run slot scan (cycles slots 01-08)\n• \`@Salem AI reply <bank> <slot> <message>\` - Send SMS reply (in thread)\n• \`@Salem AI status <bank> <slot>\` - Check SIM slot status`,
     thread_ts: event.thread_ts || event.ts
   });
 });
@@ -1349,11 +1349,11 @@ app.message(/^scan$/i, async ({ message, say }) => {
 });
 
 /**
- * Message listener for "code" command (without @Salem AI mention)
- * Usage: code email@example.com
+ * Message listener for "code" or "tm" command (without @Salem AI mention)
+ * Usage: code email@example.com OR tm email@example.com
  * Triggers verification code watch workflow
  */
-app.message(/^code\s+/i, async ({ message, say }) => {
+app.message(/^(code|tm)\s+/i, async ({ message, say }) => {
   // Ignore bot messages
   if (message.bot_id || message.subtype === 'bot_message') {
     return;
@@ -1365,19 +1365,20 @@ app.message(/^code\s+/i, async ({ message, say }) => {
   }
 
   // Extract email - handle both raw email and Slack mailto link format
-  const text = message.text.replace(/^code\s+/i, '').trim();
+  const text = message.text.replace(/^(code|tm)\s+/i, '').trim();
   const emailMatch = text.match(/<mailto:([^|]+)\|[^>]+>/) || text.match(/^([^\s@]+@[^\s@]+\.[^\s@]+)$/i);
 
   if (!emailMatch) {
     await say({
-      text: 'Usage: `code <email>`\nExample: `code user@example.com`',
+      text: 'Usage: `code <email>` or `tm <email>`\nExample: `code user@example.com`',
       thread_ts: message.ts
     });
     return;
   }
 
   const email = emailMatch[1];
-  console.log(`[CODE WATCH] Triggered by user ${message.user} for email: ${email}`);
+  const cmdUsed = message.text.match(/^(code|tm)/i)[1].toLowerCase();
+  console.log(`[CODE WATCH] Triggered by user ${message.user} via "${cmdUsed}" for email: ${email}`);
 
   // Reply in thread to acknowledge
   await say({
