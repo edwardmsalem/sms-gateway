@@ -1,7 +1,7 @@
 /**
  * Verification Code Watch Module
  * Monitors for verification codes from multiple services:
- * - Email: Microsoft, MLB, Ticketmaster, SeatGeek, Google
+ * - Email: MLB, Ticketmaster, SeatGeek, Google, AXS
  * - SMS: Ticketmaster, MLB, AXS, Google
  */
 
@@ -344,11 +344,6 @@ function detectEmailService(from, subject) {
                           subjectLower.includes('reset password') ||
                           subjectLower.includes('change your') && subjectLower.includes('password');
 
-  // Microsoft/Outlook - DON'T filter by email (show all)
-  if (fromLower.includes('microsoft.com') || fromLower.includes('accountprotection')) {
-    return { service: 'Microsoft', filterByEmail: false, isPasswordReset };
-  }
-
   // MLB
   if (fromLower.includes('@mlb.com') || fromLower.includes('mlb.com')) {
     return { service: 'MLB', filterByEmail: true, isPasswordReset };
@@ -433,10 +428,6 @@ function extractResetLink(body, service) {
 function extractCodeFromEmail(body, service) {
   // Service-specific patterns
   const servicePatterns = {
-    'Microsoft': [
-      /Security code:\s*(\d{6})/i,
-      /security code is[:\s]*(\d{6})/i,
-    ],
     'MLB': [
       /verification code is[:\s]*(?:<[^>]*>)?(\d{6})/i,
       /verification code[:\s]*(\d{6})/i,
@@ -485,7 +476,7 @@ function extractCodeFromEmail(body, service) {
 
 /**
  * Poll Gmail for verification emails from ALL services
- * Searches for: Microsoft, MLB, SeatGeek, Ticketmaster, Google, AXS
+ * Searches for: MLB, SeatGeek, Ticketmaster, Google, AXS
  * Handles both verification codes AND password reset links
  */
 async function pollGmailForVerificationCodes(slackApp, watch, email) {
@@ -588,16 +579,8 @@ async function pollGmailForVerificationCodes(slackApp, watch, email) {
 
           if (code) {
             watch.codesDelivered = true;
-
-            if (!filterByEmail) {
-              // Microsoft - show with disclaimer
-              await postToThread(slackApp, watch.slackChannel, watch.threadTs,
-                `📬 *${code}* (${service}) — may not be for this email`);
-            } else {
-              await postToThread(slackApp, watch.slackChannel, watch.threadTs,
-                getMessage('codeFound', code, service));
-            }
-
+            await postToThread(slackApp, watch.slackChannel, watch.threadTs,
+              getMessage('codeFound', code, service));
             console.log(`[CODE WATCH] Found ${service || 'unknown'} code: ${code}`);
           }
         }
