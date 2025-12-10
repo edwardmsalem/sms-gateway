@@ -1539,8 +1539,9 @@ app.message(async ({ message, say }) => {
     // Handle Textchest flow (email or phone)
     if (textchestNumber) {
       const phoneDisplay = formatPhoneDisplay(textchestNumber.number);
+      const emailInfo = textchestNumber.email ? `\nEmail: ${textchestNumber.email}` : '';
       await say({
-        text: `✅ Found in Textchest\nPhone: ${phoneDisplay}\n\n⚡ Activating...`,
+        text: `✅ Found in Textchest\nPhone: ${phoneDisplay}${emailInfo}\n\n⚡ Activating...`,
         thread_ts: message.ts
       });
 
@@ -1598,8 +1599,9 @@ app.message(async ({ message, say }) => {
     }
 
     const phoneDisplay = formatPhoneDisplay(foundRecord.phone);
+    const emailInfo = foundRecord.email ? `\nEmail: ${foundRecord.email}` : '';
     await say({
-      text: `✅ Found: *${foundRecord.name}*\nPhone: ${phoneDisplay}\n\n🔍 Searching SIM banks...`,
+      text: `✅ Found: *${foundRecord.name}*\nPhone: ${phoneDisplay}${emailInfo}\n\n🔍 Searching SIM banks...`,
       thread_ts: message.ts
     });
 
