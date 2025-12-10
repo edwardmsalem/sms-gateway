@@ -2,6 +2,7 @@ const { App, ExpressReceiver } = require('@slack/bolt');
 const crypto = require('crypto');
 const db = require('./database');
 const simbank = require('./simbank');
+const textchest = require('./textchest');
 const { formatPhoneDisplay, parsePhoneFromCommand, formatTime } = require('./utils');
 const { trackOutboundSms } = require('./deliveryTracker');
 const sweepTest = require('./sweepTest');
@@ -11,6 +12,12 @@ const ticketmasterWatch = require('./ticketmasterWatch');
 const CHANNEL_ID = process.env.SLACK_CHANNEL_ID;
 const SPAM_CHANNEL_ID = 'C0A1EUF2D36';
 const VERIFICATION_CHANNEL_ID = 'C05KCUMN35M';
+const SIM_ACTIVATE_CHANNEL_ID = 'C0A3LSXGCGY';
+
+// SIM Activation watches - track active watches to post SMS to threads
+// Key: normalized phone, Value: { threadTs, channel, endTime }
+const simActivationWatches = new Map();
+const SIM_WATCH_DURATION_MS = 10 * 60 * 1000; // 10 minutes
 
 // Spam threading: key = "sender|contentHash", value = { thread_ts, channel, count, timestamp, parentTs, recipients }
 const spamThreads = new Map();
@@ -1400,6 +1407,294 @@ app.message(/^tm\s+/i, async ({ message, say }) => {
 });
 
 /**
+ * SIM Activation Channel Handler
+ * When a phone number or email is posted in the activation channel,
+ * look it up in Monday.com and activate the associated SIM
+ */
+app.message(async ({ message, say }) => {
+  // Only process messages in the SIM activation channel
+  if (message.channel !== SIM_ACTIVATE_CHANNEL_ID) {
+    return;
+  }
+
+  // Ignore bot messages
+  if (message.bot_id || message.subtype === 'bot_message') {
+    return;
+  }
+
+  // Ignore threaded replies (only respond to top-level messages)
+  if (message.thread_ts && message.thread_ts !== message.ts) {
+    return;
+  }
+
+  const monday = require('./monday');
+  const text = message.text.trim();
+
+  // Detect if input is email or phone
+  // Email: contains @ and looks like email format (handle Slack mailto links too)
+  const emailMatch = text.match(/<mailto:([^|]+)\|[^>]+>/) || text.match(/^([^\s@]+@[^\s@]+\.[^\s@]+)$/i);
+
+  // Phone: extract digits and check for 10-11 digit number
+  // Handles: (555) 123-4567, 555-123-4567, 555.123.4567, +1 555 123 4567, 15551234567, etc.
+  const digitsOnly = text.replace(/\D/g, '');
+  let phoneMatch = null;
+
+  // Check if we have a valid phone number (10 or 11 digits)
+  if (digitsOnly.length === 10) {
+    phoneMatch = digitsOnly;
+  } else if (digitsOnly.length === 11 && digitsOnly.startsWith('1')) {
+    phoneMatch = digitsOnly;
+  } else if (digitsOnly.length === 12 && digitsOnly.startsWith('1')) {
+    // Handle +1 prefix where + becomes nothing but space adds extra
+    phoneMatch = digitsOnly.substring(1);
+  }
+
+  // Also try to extract phone from text that might have extra content
+  // e.g., "Phone: (555) 123-4567" or "Call 555-123-4567"
+  if (!phoneMatch && !emailMatch) {
+    const phonePattern = /(?:\+?1[-.\s]?)?\(?([0-9]{3})\)?[-.\s]?([0-9]{3})[-.\s]?([0-9]{4})/;
+    const extracted = text.match(phonePattern);
+    if (extracted) {
+      phoneMatch = extracted[1] + extracted[2] + extracted[3];
+      // Add leading 1 if not present (normalize to 11 digits)
+      if (phoneMatch.length === 10) {
+        phoneMatch = '1' + phoneMatch;
+      }
+    }
+  }
+
+  if (!emailMatch && !phoneMatch) {
+    // Not a recognizable email or phone, ignore
+    return;
+  }
+
+  console.log(`[SIM ACTIVATE] Request in channel: ${text}`);
+
+  // Add eyes reaction to show we're processing
+  try {
+    await app.client.reactions.add({
+      channel: message.channel,
+      timestamp: message.ts,
+      name: 'eyes'
+    });
+  } catch (e) { /* ignore */ }
+
+  let foundRecord = null;
+  let searchType = '';
+  let textchestNumber = null;
+
+  try {
+    if (emailMatch) {
+      const email = emailMatch[1];
+      searchType = 'email';
+      console.log(`[SIM ACTIVATE] Searching by email: ${email}`);
+
+      await say({
+        text: `🔍 Searching for ${email}...`,
+        thread_ts: message.ts
+      });
+
+      // Step 1: Try Textchest first
+      textchestNumber = await textchest.findNumberByEmail(email);
+
+      if (textchestNumber) {
+        console.log(`[SIM ACTIVATE] Found in Textchest: ${textchestNumber.number}`);
+        // Textchest has its own activation flow - handle it separately below
+      } else {
+        // Step 2: Try SS Email (Associates board)
+        await say({
+          text: `Not in Textchest. Checking Monday.com...`,
+          thread_ts: message.ts
+        });
+        foundRecord = await monday.searchAssociateByEmail(email);
+
+        // Step 3: If not found, try External Emails board
+        if (!foundRecord) {
+          foundRecord = await monday.searchExternalByEmail(email);
+        }
+      }
+    } else if (phoneMatch) {
+      // phoneMatch is already normalized to digits only
+      searchType = 'phone';
+      console.log(`[SIM ACTIVATE] Searching by phone: ${phoneMatch}`);
+
+      await say({
+        text: `🔍 Searching for ${formatPhoneDisplay(phoneMatch)}...`,
+        thread_ts: message.ts
+      });
+
+      // Step 1: Try Textchest first
+      textchestNumber = await textchest.findNumberByPhone(phoneMatch);
+
+      if (!textchestNumber) {
+        // Step 2: Search Associates board by phone
+        await say({
+          text: `Not in Textchest. Checking Monday.com...`,
+          thread_ts: message.ts
+        });
+        foundRecord = await monday.searchAssociateByPhone(phoneMatch);
+      }
+    }
+
+    // Handle Textchest flow (email or phone)
+    if (textchestNumber) {
+      const phoneDisplay = formatPhoneDisplay(textchestNumber.number);
+      await say({
+        text: `✅ Found in Textchest\nPhone: ${phoneDisplay}\n\n⚡ Activating...`,
+        thread_ts: message.ts
+      });
+
+      try {
+        const activateResult = await textchest.activateSim(textchestNumber.number);
+        await say({
+          text: `:white_check_mark: *Activated!*\nSlot: ${activateResult.slot}\n\n:eyes: Watching for SMS for 10 minutes...`,
+          thread_ts: message.ts
+        });
+        await app.client.reactions.add({
+          channel: message.channel,
+          timestamp: message.ts,
+          name: 'white_check_mark'
+        }).catch(() => {});
+
+        // Start watching for SMS to this number
+        const normalizedWatchPhone = textchestNumber.number.replace(/\D/g, '');
+        const watchEndTime = Date.now() + SIM_WATCH_DURATION_MS;
+
+        simActivationWatches.set(normalizedWatchPhone, {
+          threadTs: message.ts,
+          channel: message.channel,
+          endTime: watchEndTime,
+          name: textchestNumber.email || 'Textchest'
+        });
+
+        console.log(`[SIM ACTIVATE] Started 10-min watch for ${normalizedWatchPhone} (Textchest)`);
+        return;
+      } catch (err) {
+        await say({
+          text: `:warning: Activation failed: ${err.message}`,
+          thread_ts: message.ts
+        });
+        await app.client.reactions.add({
+          channel: message.channel,
+          timestamp: message.ts,
+          name: 'warning'
+        }).catch(() => {});
+        return;
+      }
+    }
+
+    // Monday.com flow
+    if (!foundRecord) {
+      await say({
+        text: `:x: Not found in Textchest or Monday.com`,
+        thread_ts: message.ts
+      });
+      await app.client.reactions.add({
+        channel: message.channel,
+        timestamp: message.ts,
+        name: 'x'
+      }).catch(() => {});
+      return;
+    }
+
+    const phoneDisplay = formatPhoneDisplay(foundRecord.phone);
+    await say({
+      text: `✅ Found: *${foundRecord.name}*\nPhone: ${phoneDisplay}\n\n🔍 Searching SIM banks...`,
+      thread_ts: message.ts
+    });
+
+    // Find which SIM bank/slot has this phone
+    const slotInfo = await simbank.findSlotByPhone(foundRecord.phone);
+
+    if (!slotInfo) {
+      await say({
+        text: `:warning: Phone ${phoneDisplay} not found in any SIM bank`,
+        thread_ts: message.ts
+      });
+      await app.client.reactions.add({
+        channel: message.channel,
+        timestamp: message.ts,
+        name: 'warning'
+      }).catch(() => {});
+      return;
+    }
+
+    await say({
+      text: `📍 Found in Bank ${slotInfo.bankId} · Slot ${slotInfo.slot}\nStatus: ${slotInfo.status.statusText}\n\n⚡ Activating...`,
+      thread_ts: message.ts
+    });
+
+    // Activate the slot
+    const bank = db.getSimBank(slotInfo.bankId);
+    if (!bank) {
+      await say({
+        text: `:x: Bank ${slotInfo.bankId} not configured`,
+        thread_ts: message.ts
+      });
+      return;
+    }
+
+    try {
+      await simbank.activateSlot(bank, slotInfo.slot);
+      await say({
+        text: `:white_check_mark: *Activated!*\nBank ${slotInfo.bankId} · Slot ${slotInfo.slot}\n\n:eyes: Watching for SMS for 10 minutes...`,
+        thread_ts: message.ts
+      });
+      await app.client.reactions.add({
+        channel: message.channel,
+        timestamp: message.ts,
+        name: 'white_check_mark'
+      }).catch(() => {});
+
+      // Start watching for SMS to this number
+      const normalizedWatchPhone = foundRecord.phone.replace(/\D/g, '');
+      const watchEndTime = Date.now() + SIM_WATCH_DURATION_MS;
+
+      simActivationWatches.set(normalizedWatchPhone, {
+        threadTs: message.ts,
+        channel: message.channel,
+        endTime: watchEndTime,
+        name: foundRecord.name
+      });
+
+      console.log(`[SIM ACTIVATE] Started 10-min watch for ${normalizedWatchPhone}`);
+
+      // Set cleanup timer
+      setTimeout(() => {
+        const watch = simActivationWatches.get(normalizedWatchPhone);
+        if (watch && watch.threadTs === message.ts) {
+          simActivationWatches.delete(normalizedWatchPhone);
+          app.client.chat.postMessage({
+            channel: message.channel,
+            thread_ts: message.ts,
+            text: `:hourglass: Watch ended (10 minutes)`
+          }).catch(() => {});
+          console.log(`[SIM ACTIVATE] Watch ended for ${normalizedWatchPhone}`);
+        }
+      }, SIM_WATCH_DURATION_MS);
+
+    } catch (activateErr) {
+      await say({
+        text: `:x: Activation failed: ${activateErr.message}`,
+        thread_ts: message.ts
+      });
+      await app.client.reactions.add({
+        channel: message.channel,
+        timestamp: message.ts,
+        name: 'x'
+      }).catch(() => {});
+    }
+
+  } catch (error) {
+    console.error('[SIM ACTIVATE] Error:', error.message);
+    await say({
+      text: `:x: Error: ${error.message}`,
+      thread_ts: message.ts
+    });
+  }
+});
+
+/**
  * Post a Maxsip SMS message to Slack
  */
 async function postMaxsipMessage(content, enrichment) {
@@ -1474,5 +1769,45 @@ module.exports = {
   postMaxsipMessage,
   addReaction,
   isVerificationCode,
+  checkSimActivationWatch,
   CHANNEL_ID
 };
+
+/**
+ * Check if there's an active SIM activation watch for this phone and post SMS to thread
+ * @param {string} recipientPhone - The receiving phone number (our SIM)
+ * @param {string} senderPhone - The sender's phone number
+ * @param {string} content - Message content
+ * @returns {boolean} - True if message was posted to a watch thread
+ */
+async function checkSimActivationWatch(recipientPhone, senderPhone, content) {
+  // Normalize to digits only - try both 10 and 11 digit versions
+  const digits = recipientPhone.replace(/\D/g, '');
+  const variants = [digits];
+  if (digits.length === 11 && digits.startsWith('1')) {
+    variants.push(digits.substring(1));
+  } else if (digits.length === 10) {
+    variants.push('1' + digits);
+  }
+
+  for (const phone of variants) {
+    const watch = simActivationWatches.get(phone);
+    if (watch && Date.now() < watch.endTime) {
+      const senderDisplay = formatPhoneDisplay(senderPhone);
+
+      try {
+        await app.client.chat.postMessage({
+          channel: watch.channel,
+          thread_ts: watch.threadTs,
+          text: `📨 *SMS Received*\nFrom: ${senderDisplay}\n\n> ${content}`
+        });
+        console.log(`[SIM ACTIVATE] Posted SMS to watch thread for ${phone}`);
+        return true;
+      } catch (err) {
+        console.error(`[SIM ACTIVATE] Failed to post to thread: ${err.message}`);
+      }
+    }
+  }
+
+  return false;
+}

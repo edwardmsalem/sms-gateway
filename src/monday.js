@@ -614,6 +614,86 @@ async function searchExternalByEmail(email) {
   return null;
 }
 
+/**
+ * Search Associates board by phone number (ss_mobile column)
+ * @param {string} phone - Phone number to search for
+ * @returns {Promise<{name: string, phone: string, email: string}|null>}
+ */
+async function searchAssociateByPhone(phone) {
+  const normalizedPhone = phone.replace(/\D/g, '');
+  // Try with and without leading 1
+  const phoneVariants = [normalizedPhone];
+  if (normalizedPhone.startsWith('1') && normalizedPhone.length === 11) {
+    phoneVariants.push(normalizedPhone.substring(1));
+  } else if (normalizedPhone.length === 10) {
+    phoneVariants.push('1' + normalizedPhone);
+  }
+
+  console.log(`[MONDAY] Searching Associates by phone: ${normalizedPhone}`);
+
+  for (const searchPhone of phoneVariants) {
+    const query = `
+      query ($boardId: ID!, $columnId: String!, $columnValue: String!) {
+        items_page_by_column_values(
+          board_id: $boardId,
+          columns: [{ column_id: $columnId, column_values: [$columnValue] }],
+          limit: 10
+        ) {
+          items {
+            id
+            name
+            column_values {
+              id
+              text
+            }
+          }
+        }
+      }
+    `;
+
+    try {
+      const result = await mondayQuery(query, {
+        boardId: ASSOCIATES_BOARD_ID,
+        columnId: 'ss_mobile',
+        columnValue: searchPhone
+      });
+
+      const items = result.items_page_by_column_values?.items || [];
+
+      for (const item of items) {
+        let itemPhone = null;
+        let email = null;
+
+        for (const col of item.column_values) {
+          if (col.id === 'ss_mobile' && col.text && col.text !== 'null') {
+            itemPhone = col.text;
+          }
+          if (col.id === 'ss_email' && col.text && col.text !== 'null') {
+            email = col.text;
+          }
+        }
+
+        if (itemPhone) {
+          const itemPhoneClean = itemPhone.replace(/\D/g, '');
+          if (phoneVariants.includes(itemPhoneClean)) {
+            console.log(`[MONDAY] Found phone match: ${item.name}, phone=${itemPhone}`);
+            return {
+              name: item.name,
+              phone: itemPhoneClean,
+              email: email || null
+            };
+          }
+        }
+      }
+    } catch (err) {
+      console.error(`[MONDAY] Phone search error: ${err.message}`);
+    }
+  }
+
+  console.log(`[MONDAY] No phone match found for ${normalizedPhone}`);
+  return null;
+}
+
 module.exports = {
   lookupDealsByPhone,
   getAreaCodeFromPhone,
@@ -622,5 +702,6 @@ module.exports = {
   getCloserSlackId,
   searchAssociateByEmail,
   searchExternalByEmail,
+  searchAssociateByPhone,
   STATE_NAMES
 };

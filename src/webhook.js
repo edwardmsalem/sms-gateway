@@ -366,6 +366,9 @@ router.post('/sms', async (req, res) => {
     // Check for active Ticketmaster watch and notify if message contains "Ticketmaster"
     ticketmasterWatch.checkWatchAndNotify(recipientPhone, senderPhone, content, slack.app);
 
+    // Check for active SIM activation watch and post to thread
+    slack.checkSimActivationWatch(recipientPhone, senderPhone, content);
+
     res.status(200).json({ status: 'ok' });
   } catch (error) {
     console.error('Webhook error:', error);

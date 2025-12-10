@@ -135,9 +135,43 @@ async function findNumberByEmail(email) {
   return match || null;
 }
 
+/**
+ * Find a number by phone (checks if phone matches any Textchest number)
+ * @param {string} phone - Phone number to search for
+ * @returns {Promise<{number: string, tags: string[], email: string}|null>}
+ */
+async function findNumberByPhone(phone) {
+  const numbers = await getNumbers();
+  const normalizedPhone = phone.replace(/\D/g, '');
+
+  // Build variants (with and without leading 1)
+  const phoneVariants = [normalizedPhone];
+  if (normalizedPhone.startsWith('1') && normalizedPhone.length === 11) {
+    phoneVariants.push(normalizedPhone.substring(1));
+  } else if (normalizedPhone.length === 10) {
+    phoneVariants.push('1' + normalizedPhone);
+  }
+
+  console.log(`[TEXTCHEST] Searching for phone: ${normalizedPhone}`);
+
+  const match = numbers.find(n => {
+    const numPhone = (n.number || n.Number || '').replace(/\D/g, '');
+    return phoneVariants.includes(numPhone) ||
+           phoneVariants.includes(numPhone.replace(/^1/, '')) ||
+           phoneVariants.includes('1' + numPhone);
+  });
+
+  if (match) {
+    console.log(`[TEXTCHEST] Found phone match:`, match.number || match.Number);
+  }
+
+  return match || null;
+}
+
 module.exports = {
   getNumbers,
   getMessages,
   activateSim,
-  findNumberByEmail
+  findNumberByEmail,
+  findNumberByPhone
 };
