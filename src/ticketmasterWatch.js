@@ -340,7 +340,9 @@ setInterval(cleanupExpiredWatches, 60 * 1000);
 function detectEmailService(from, subject) {
   const fromLower = from.toLowerCase();
   const subjectLower = subject.toLowerCase();
-  const isPasswordReset = subjectLower.includes('password reset') || subjectLower.includes('reset password');
+  const isPasswordReset = subjectLower.includes('password reset') ||
+                          subjectLower.includes('reset password') ||
+                          subjectLower.includes('change your') && subjectLower.includes('password');
 
   // Microsoft/Outlook - DON'T filter by email (show all)
   if (fromLower.includes('microsoft.com') || fromLower.includes('accountprotection')) {
@@ -389,6 +391,11 @@ function extractResetLink(body, service) {
     'AXS': [
       /href="(https:\/\/www\.axs\.com\/new-password[^"]+)"/i,
       /(https:\/\/www\.axs\.com\/new-password\S+)/i,
+    ],
+    'SeatGeek': [
+      /href="(https:\/\/seatgeek\.com\/change_password\/code\/[^"]+)"/i,
+      /(https:\/\/seatgeek\.com\/change_password\/code\/\S+)/i,
+      /<(https:\/\/seatgeek\.com\/change_password\/code\/[^>]+)>/i,  // Text format: <URL>
     ],
   };
 
@@ -502,7 +509,7 @@ async function pollGmailForVerificationCodes(slackApp, watch, email) {
       // - Subject patterns for password resets
       // - From known senders OR containing the target email
       // - Only last 1 hour
-      const query = `(subject:"security code" OR subject:"verification code" OR subject:"authentication code" OR subject:"reset password" OR subject:"password reset" OR subject:"sign in" OR subject:"sign into") newer_than:1h`;
+      const query = `(subject:"security code" OR subject:"verification code" OR subject:"authentication code" OR subject:"reset password" OR subject:"password reset" OR subject:"change your" OR subject:"sign in" OR subject:"sign into") newer_than:1h`;
 
       const response = await gmailClient.users.messages.list({
         userId: 'me',
