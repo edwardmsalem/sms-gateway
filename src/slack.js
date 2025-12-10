@@ -534,7 +534,7 @@ function formatSlotStatusForSlack(status) {
 /**
  * @Salem AI mention handler
  * Commands:
- * - @Salem AI tm <email> - Watch for Ticketmaster codes (SMS + Email)
+ * - @Salem AI code <email> - Watch for verification codes (SMS + Email)
  * - @Salem AI scan - Run slot scan (cycles through slots 01-08)
  * - @Salem AI reply <bank> <slot> <message> - Send SMS reply (in thread)
  * - @Salem AI status <bank> <slot> - Check SIM slot status
@@ -580,15 +580,15 @@ app.event('app_mention', async ({ event, say }) => {
     return;
   }
 
-  // Check if this is a Ticketmaster code watch: @Salem AI tm <email>
-  if (parts[0]?.toLowerCase() === 'tm') {
+  // Check if this is a verification code watch: @Salem AI code <email>
+  if (parts[0]?.toLowerCase() === 'code') {
     // Extract email - Slack auto-links as <mailto:user@example.com|user@example.com>
-    const restOfText = fullText.replace(/^tm\s+/i, '');
+    const restOfText = fullText.replace(/^code\s+/i, '');
     const emailMatch = restOfText.match(/<mailto:([^|]+)\|[^>]+>/) || restOfText.match(/^([^\s@]+@[^\s@]+\.[^\s@]+)$/i);
 
     if (!emailMatch) {
       await say({
-        text: 'Usage: `@Salem AI tm <email>`\nExample: `@Salem AI tm user@example.com`',
+        text: 'Usage: `@Salem AI code <email>`\nExample: `@Salem AI code user@example.com`',
         thread_ts: event.thread_ts || event.ts
       });
       return;
@@ -596,7 +596,7 @@ app.event('app_mention', async ({ event, say }) => {
 
     const email = emailMatch[1];
     await say({
-      text: `🎫 Starting Ticketmaster code watch for ${email}...\n_Searching Textchest + Gmail for 10 minutes_`,
+      text: `Starting code watch for ${email}...`,
       thread_ts: event.ts
     });
 
@@ -604,12 +604,12 @@ app.event('app_mention', async ({ event, say }) => {
     setImmediate(() => {
       ticketmasterWatch.startTextchestWatch(app, email, event.channel, event.ts)
         .catch(error => {
-          console.error('[TMCODE] Textchest watch failed:', error.message);
+          console.error('[CODE WATCH] Watch failed:', error.message);
           app.client.chat.postMessage({
             channel: event.channel,
             thread_ts: event.ts,
             text: `:x: Error: ${error.message}`
-          }).catch(e => console.error('[TMCODE] Failed to post error:', e.message));
+          }).catch(e => console.error('[CODE WATCH] Failed to post error:', e.message));
         });
     });
     return;
@@ -802,7 +802,7 @@ app.event('app_mention', async ({ event, say }) => {
 
   // Default: show help message for unrecognized commands
   await say({
-    text: `*@Salem AI Commands:*\n• \`@Salem AI tm <email>\` - Watch for Ticketmaster codes\n• \`@Salem AI scan\` - Run slot scan (cycles slots 01-08)\n• \`@Salem AI reply <bank> <slot> <message>\` - Send SMS reply (in thread)\n• \`@Salem AI status <bank> <slot>\` - Check SIM slot status`,
+    text: `*@Salem AI Commands:*\n• \`@Salem AI code <email>\` - Watch for verification codes\n• \`@Salem AI scan\` - Run slot scan (cycles slots 01-08)\n• \`@Salem AI reply <bank> <slot> <message>\` - Send SMS reply (in thread)\n• \`@Salem AI status <bank> <slot>\` - Check SIM slot status`,
     thread_ts: event.thread_ts || event.ts
   });
 });
@@ -1349,11 +1349,11 @@ app.message(/^scan$/i, async ({ message, say }) => {
 });
 
 /**
- * Message listener for "tm" command (without @Salem AI mention)
- * Usage: tm email@example.com
- * Triggers Ticketmaster code watch workflow
+ * Message listener for "code" command (without @Salem AI mention)
+ * Usage: code email@example.com
+ * Triggers verification code watch workflow
  */
-app.message(/^tm\s+/i, async ({ message, say }) => {
+app.message(/^code\s+/i, async ({ message, say }) => {
   // Ignore bot messages
   if (message.bot_id || message.subtype === 'bot_message') {
     return;
@@ -1365,23 +1365,23 @@ app.message(/^tm\s+/i, async ({ message, say }) => {
   }
 
   // Extract email - handle both raw email and Slack mailto link format
-  const text = message.text.replace(/^tm\s+/i, '').trim();
+  const text = message.text.replace(/^code\s+/i, '').trim();
   const emailMatch = text.match(/<mailto:([^|]+)\|[^>]+>/) || text.match(/^([^\s@]+@[^\s@]+\.[^\s@]+)$/i);
 
   if (!emailMatch) {
     await say({
-      text: 'Usage: `tm <email>`\nExample: `tm user@example.com`',
+      text: 'Usage: `code <email>`\nExample: `code user@example.com`',
       thread_ts: message.ts
     });
     return;
   }
 
   const email = emailMatch[1];
-  console.log(`[TM] Triggered by user ${message.user} for email: ${email}`);
+  console.log(`[CODE WATCH] Triggered by user ${message.user} for email: ${email}`);
 
   // Reply in thread to acknowledge
   await say({
-    text: `🎫 Starting Ticketmaster code watch for ${email}...\n_Searching Textchest + Gmail for 10 minutes_`,
+    text: `Starting code watch for ${email}...`,
     thread_ts: message.ts
   });
 
@@ -1389,12 +1389,12 @@ app.message(/^tm\s+/i, async ({ message, say }) => {
   setImmediate(() => {
     ticketmasterWatch.startTextchestWatch(app, email, message.channel, message.ts)
       .catch(error => {
-        console.error('[TM] Textchest watch failed:', error.message);
+        console.error('[CODE WATCH] Watch failed:', error.message);
         app.client.chat.postMessage({
           channel: message.channel,
           thread_ts: message.ts,
           text: `:x: Error: ${error.message}`
-        }).catch(e => console.error('[TM] Failed to post error:', e.message));
+        }).catch(e => console.error('[CODE WATCH] Failed to post error:', e.message));
       });
   });
 });
