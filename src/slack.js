@@ -1523,11 +1523,20 @@ app.message(async ({ message, say }) => {
         thread_ts: message.ts
       });
 
-      // Search Associates board by phone
-      foundRecord = await monday.searchAssociateByPhone(phoneMatch);
+      // Step 1: Try Textchest first
+      textchestNumber = await textchest.findNumberByPhone(phoneMatch);
+
+      if (!textchestNumber) {
+        // Step 2: Search Associates board by phone
+        await say({
+          text: `Not in Textchest. Checking Monday.com...`,
+          thread_ts: message.ts
+        });
+        foundRecord = await monday.searchAssociateByPhone(phoneMatch);
+      }
     }
 
-    // Handle Textchest flow (email only)
+    // Handle Textchest flow (email or phone)
     if (textchestNumber) {
       const phoneDisplay = formatPhoneDisplay(textchestNumber.number);
       await say({
