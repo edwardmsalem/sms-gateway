@@ -15,9 +15,20 @@ const VERIFICATION_CHANNEL_ID = 'C05KCUMN35M';
 const SIM_ACTIVATE_CHANNEL_ID = 'C0A3LSXGCGY';
 
 // SIM Activation watches - track active watches to post SMS to threads
-// Key: normalized phone, Value: { threadTs, channel, endTime }
+// Key: normalized phone (10 digits), Value: { threadTs, channel, endTime }
 const simActivationWatches = new Map();
 const SIM_WATCH_DURATION_MS = 10 * 60 * 1000; // 10 minutes
+
+/**
+ * Normalize phone to 10 digits (strip leading 1 if present)
+ */
+function normalizeToTenDigits(phone) {
+  const digits = phone.replace(/\D/g, '');
+  if (digits.length === 11 && digits.startsWith('1')) {
+    return digits.substring(1);
+  }
+  return digits;
+}
 
 // Spam threading: key = "sender|contentHash", value = { thread_ts, channel, count, timestamp, parentTs, recipients }
 const spamThreads = new Map();
@@ -1539,8 +1550,9 @@ app.message(async ({ message, say }) => {
     // Handle Textchest flow (email or phone)
     if (textchestNumber) {
       const phoneDisplay = formatPhoneDisplay(textchestNumber.number);
+      const emailInfo = textchestNumber.email ? `\nEmail: ${textchestNumber.email}` : '';
       await say({
-        text: `✅ Found in Textchest\nPhone: ${phoneDisplay}\n\n⚡ Activating...`,
+        text: `✅ Found in Textchest\nPhone: ${phoneDisplay}${emailInfo}\n\n⚡ Activating...`,
         thread_ts: message.ts
       });
 
@@ -1556,8 +1568,8 @@ app.message(async ({ message, say }) => {
           name: 'white_check_mark'
         }).catch(() => {});
 
-        // Start watching for SMS to this number
-        const normalizedWatchPhone = textchestNumber.number.replace(/\D/g, '');
+        // Start watching for SMS to this number (normalize to 10 digits)
+        const normalizedWatchPhone = normalizeToTenDigits(textchestNumber.number);
         const watchEndTime = Date.now() + SIM_WATCH_DURATION_MS;
 
         simActivationWatches.set(normalizedWatchPhone, {
@@ -1598,8 +1610,9 @@ app.message(async ({ message, say }) => {
     }
 
     const phoneDisplay = formatPhoneDisplay(foundRecord.phone);
+    const emailInfo = foundRecord.email ? `\nEmail: ${foundRecord.email}` : '';
     await say({
-      text: `✅ Found: *${foundRecord.name}*\nPhone: ${phoneDisplay}\n\n🔍 Searching SIM banks...`,
+      text: `✅ Found: *${foundRecord.name}*\nPhone: ${phoneDisplay}${emailInfo}\n\n🔍 Searching SIM banks...`,
       thread_ts: message.ts
     });
 
@@ -1647,7 +1660,7 @@ app.message(async ({ message, say }) => {
       }).catch(() => {});
 
       // Start watching for SMS to this number
-      const normalizedWatchPhone = foundRecord.phone.replace(/\D/g, '');
+      const normalizedWatchPhone = normalizeToTenDigits(foundRecord.phone);
       const watchEndTime = Date.now() + SIM_WATCH_DURATION_MS;
 
       simActivationWatches.set(normalizedWatchPhone, {
@@ -1781,31 +1794,26 @@ module.exports = {
  * @returns {boolean} - True if message was posted to a watch thread
  */
 async function checkSimActivationWatch(recipientPhone, senderPhone, content) {
-  // Normalize to digits only - try both 10 and 11 digit versions
-  const digits = recipientPhone.replace(/\D/g, '');
-  const variants = [digits];
-  if (digits.length === 11 && digits.startsWith('1')) {
-    variants.push(digits.substring(1));
-  } else if (digits.length === 10) {
-    variants.push('1' + digits);
-  }
+  // Normalize to 10 digits (same format as stored keys)
+  const normalizedPhone = normalizeToTenDigits(recipientPhone);
 
-  for (const phone of variants) {
-    const watch = simActivationWatches.get(phone);
-    if (watch && Date.now() < watch.endTime) {
-      const senderDisplay = formatPhoneDisplay(senderPhone);
+  console.log(`[SIM ACTIVATE] Checking watch for recipient: ${recipientPhone} -> normalized: ${normalizedPhone}`);
+  console.log(`[SIM ACTIVATE] Active watches: ${Array.from(simActivationWatches.keys()).join(', ') || 'none'}`);
 
-      try {
-        await app.client.chat.postMessage({
-          channel: watch.channel,
-          thread_ts: watch.threadTs,
-          text: `📨 *SMS Received*\nFrom: ${senderDisplay}\n\n> ${content}`
-        });
-        console.log(`[SIM ACTIVATE] Posted SMS to watch thread for ${phone}`);
-        return true;
-      } catch (err) {
-        console.error(`[SIM ACTIVATE] Failed to post to thread: ${err.message}`);
-      }
+  const watch = simActivationWatches.get(normalizedPhone);
+  if (watch && Date.now() < watch.endTime) {
+    const senderDisplay = formatPhoneDisplay(senderPhone);
+
+    try {
+      await app.client.chat.postMessage({
+        channel: watch.channel,
+        thread_ts: watch.threadTs,
+        text: `📨 *SMS Received*\nFrom: ${senderDisplay}\n\n> ${content}`
+      });
+      console.log(`[SIM ACTIVATE] Posted SMS to watch thread for ${normalizedPhone}`);
+      return true;
+    } catch (err) {
+      console.error(`[SIM ACTIVATE] Failed to post to thread: ${err.message}`);
     }
   }
 
