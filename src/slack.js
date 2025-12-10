@@ -1792,8 +1792,12 @@ async function checkSimActivationWatch(recipientPhone, senderPhone, content) {
     variants.push('1' + digits);
   }
 
+  console.log(`[SIM ACTIVATE] Checking watch for recipient: ${recipientPhone} -> digits: ${digits}`);
+  console.log(`[SIM ACTIVATE] Active watches: ${Array.from(simActivationWatches.keys()).join(', ') || 'none'}`);
+
   for (const phone of variants) {
     const watch = simActivationWatches.get(phone);
+    console.log(`[SIM ACTIVATE] Checking variant ${phone}: ${watch ? 'FOUND' : 'not found'}`);
     if (watch && Date.now() < watch.endTime) {
       const senderDisplay = formatPhoneDisplay(senderPhone);
 
