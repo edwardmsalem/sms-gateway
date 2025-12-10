@@ -11,6 +11,7 @@ const ticketmasterWatch = require('./ticketmasterWatch');
 const CHANNEL_ID = process.env.SLACK_CHANNEL_ID;
 const SPAM_CHANNEL_ID = 'C0A1EUF2D36';
 const VERIFICATION_CHANNEL_ID = 'C05KCUMN35M';
+const SIM_ACTIVATE_CHANNEL_ID = 'C0A3LSXGCGY';
 
 // Spam threading: key = "sender|contentHash", value = { thread_ts, channel, count, timestamp, parentTs, recipients }
 const spamThreads = new Map();
@@ -1397,6 +1398,169 @@ app.message(/^tm\s+/i, async ({ message, say }) => {
         }).catch(e => console.error('[TM] Failed to post error:', e.message));
       });
   });
+});
+
+/**
+ * SIM Activation Channel Handler
+ * When a phone number or email is posted in the activation channel,
+ * look it up in Monday.com and activate the associated SIM
+ */
+app.message(async ({ message, say }) => {
+  // Only process messages in the SIM activation channel
+  if (message.channel !== SIM_ACTIVATE_CHANNEL_ID) {
+    return;
+  }
+
+  // Ignore bot messages
+  if (message.bot_id || message.subtype === 'bot_message') {
+    return;
+  }
+
+  // Ignore threaded replies (only respond to top-level messages)
+  if (message.thread_ts && message.thread_ts !== message.ts) {
+    return;
+  }
+
+  const monday = require('./monday');
+  const text = message.text.trim();
+
+  // Detect if input is email or phone
+  // Email: contains @ and looks like email format
+  // Phone: 10-11 digits
+  const emailMatch = text.match(/<mailto:([^|]+)\|[^>]+>/) || text.match(/^([^\s@]+@[^\s@]+\.[^\s@]+)$/i);
+  const phoneMatch = text.replace(/\D/g, '').match(/^1?\d{10}$/);
+
+  if (!emailMatch && !phoneMatch) {
+    // Not a recognizable email or phone, ignore
+    return;
+  }
+
+  console.log(`[SIM ACTIVATE] Request in channel: ${text}`);
+
+  // Add eyes reaction to show we're processing
+  try {
+    await app.client.reactions.add({
+      channel: message.channel,
+      timestamp: message.ts,
+      name: 'eyes'
+    });
+  } catch (e) { /* ignore */ }
+
+  let foundRecord = null;
+  let searchType = '';
+
+  try {
+    if (emailMatch) {
+      const email = emailMatch[1];
+      searchType = 'email';
+      console.log(`[SIM ACTIVATE] Searching by email: ${email}`);
+
+      await say({
+        text: `🔍 Searching for ${email}...`,
+        thread_ts: message.ts
+      });
+
+      // Try SS Email first (Associates board)
+      foundRecord = await monday.searchAssociateByEmail(email);
+
+      // If not found, try External Emails board
+      if (!foundRecord) {
+        foundRecord = await monday.searchExternalByEmail(email);
+      }
+    } else if (phoneMatch) {
+      const phone = text.replace(/\D/g, '');
+      searchType = 'phone';
+      console.log(`[SIM ACTIVATE] Searching by phone: ${phone}`);
+
+      await say({
+        text: `🔍 Searching for ${formatPhoneDisplay(phone)}...`,
+        thread_ts: message.ts
+      });
+
+      // Search Associates board by phone
+      foundRecord = await monday.searchAssociateByPhone(phone);
+    }
+
+    if (!foundRecord) {
+      await say({
+        text: `:x: Not found in Monday.com`,
+        thread_ts: message.ts
+      });
+      await app.client.reactions.add({
+        channel: message.channel,
+        timestamp: message.ts,
+        name: 'x'
+      }).catch(() => {});
+      return;
+    }
+
+    const phoneDisplay = formatPhoneDisplay(foundRecord.phone);
+    await say({
+      text: `✅ Found: *${foundRecord.name}*\nPhone: ${phoneDisplay}\n\n🔍 Searching SIM banks...`,
+      thread_ts: message.ts
+    });
+
+    // Find which SIM bank/slot has this phone
+    const slotInfo = await simbank.findSlotByPhone(foundRecord.phone);
+
+    if (!slotInfo) {
+      await say({
+        text: `:warning: Phone ${phoneDisplay} not found in any SIM bank`,
+        thread_ts: message.ts
+      });
+      await app.client.reactions.add({
+        channel: message.channel,
+        timestamp: message.ts,
+        name: 'warning'
+      }).catch(() => {});
+      return;
+    }
+
+    await say({
+      text: `📍 Found in Bank ${slotInfo.bankId} · Slot ${slotInfo.slot}\nStatus: ${slotInfo.status.statusText}\n\n⚡ Activating...`,
+      thread_ts: message.ts
+    });
+
+    // Activate the slot
+    const bank = db.getSimBank(slotInfo.bankId);
+    if (!bank) {
+      await say({
+        text: `:x: Bank ${slotInfo.bankId} not configured`,
+        thread_ts: message.ts
+      });
+      return;
+    }
+
+    try {
+      await simbank.activateSlot(bank, slotInfo.slot);
+      await say({
+        text: `:white_check_mark: *Activated!*\nBank ${slotInfo.bankId} · Slot ${slotInfo.slot}`,
+        thread_ts: message.ts
+      });
+      await app.client.reactions.add({
+        channel: message.channel,
+        timestamp: message.ts,
+        name: 'white_check_mark'
+      }).catch(() => {});
+    } catch (activateErr) {
+      await say({
+        text: `:x: Activation failed: ${activateErr.message}`,
+        thread_ts: message.ts
+      });
+      await app.client.reactions.add({
+        channel: message.channel,
+        timestamp: message.ts,
+        name: 'x'
+      }).catch(() => {});
+    }
+
+  } catch (error) {
+    console.error('[SIM ACTIVATE] Error:', error.message);
+    await say({
+      text: `:x: Error: ${error.message}`,
+      thread_ts: message.ts
+    });
+  }
 });
 
 /**
