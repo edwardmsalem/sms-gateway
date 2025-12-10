@@ -2,6 +2,7 @@ const { App, ExpressReceiver } = require('@slack/bolt');
 const crypto = require('crypto');
 const db = require('./database');
 const simbank = require('./simbank');
+const textchest = require('./textchest');
 const { formatPhoneDisplay, parsePhoneFromCommand, formatTime } = require('./utils');
 const { trackOutboundSms } = require('./deliveryTracker');
 const sweepTest = require('./sweepTest');
@@ -1480,6 +1481,7 @@ app.message(async ({ message, say }) => {
 
   let foundRecord = null;
   let searchType = '';
+  let textchestNumber = null;
 
   try {
     if (emailMatch) {
@@ -1492,12 +1494,24 @@ app.message(async ({ message, say }) => {
         thread_ts: message.ts
       });
 
-      // Try SS Email first (Associates board)
-      foundRecord = await monday.searchAssociateByEmail(email);
+      // Step 1: Try Textchest first
+      textchestNumber = await textchest.findNumberByEmail(email);
 
-      // If not found, try External Emails board
-      if (!foundRecord) {
-        foundRecord = await monday.searchExternalByEmail(email);
+      if (textchestNumber) {
+        console.log(`[SIM ACTIVATE] Found in Textchest: ${textchestNumber.number}`);
+        // Textchest has its own activation flow - handle it separately below
+      } else {
+        // Step 2: Try SS Email (Associates board)
+        await say({
+          text: `Not in Textchest. Checking Monday.com...`,
+          thread_ts: message.ts
+        });
+        foundRecord = await monday.searchAssociateByEmail(email);
+
+        // Step 3: If not found, try External Emails board
+        if (!foundRecord) {
+          foundRecord = await monday.searchExternalByEmail(email);
+        }
       }
     } else if (phoneMatch) {
       // phoneMatch is already normalized to digits only
@@ -1513,9 +1527,57 @@ app.message(async ({ message, say }) => {
       foundRecord = await monday.searchAssociateByPhone(phoneMatch);
     }
 
+    // Handle Textchest flow (email only)
+    if (textchestNumber) {
+      const phoneDisplay = formatPhoneDisplay(textchestNumber.number);
+      await say({
+        text: `✅ Found in Textchest\nPhone: ${phoneDisplay}\n\n⚡ Activating...`,
+        thread_ts: message.ts
+      });
+
+      try {
+        const activateResult = await textchest.activateSim(textchestNumber.number);
+        await say({
+          text: `:white_check_mark: *Activated!*\nSlot: ${activateResult.slot}\n\n:eyes: Watching for SMS for 10 minutes...`,
+          thread_ts: message.ts
+        });
+        await app.client.reactions.add({
+          channel: message.channel,
+          timestamp: message.ts,
+          name: 'white_check_mark'
+        }).catch(() => {});
+
+        // Start watching for SMS to this number
+        const normalizedWatchPhone = textchestNumber.number.replace(/\D/g, '');
+        const watchEndTime = Date.now() + SIM_WATCH_DURATION_MS;
+
+        simActivationWatches.set(normalizedWatchPhone, {
+          threadTs: message.ts,
+          channel: message.channel,
+          endTime: watchEndTime,
+          name: textchestNumber.email || 'Textchest'
+        });
+
+        console.log(`[SIM ACTIVATE] Started 10-min watch for ${normalizedWatchPhone} (Textchest)`);
+        return;
+      } catch (err) {
+        await say({
+          text: `:warning: Activation failed: ${err.message}`,
+          thread_ts: message.ts
+        });
+        await app.client.reactions.add({
+          channel: message.channel,
+          timestamp: message.ts,
+          name: 'warning'
+        }).catch(() => {});
+        return;
+      }
+    }
+
+    // Monday.com flow
     if (!foundRecord) {
       await say({
-        text: `:x: Not found in Monday.com`,
+        text: `:x: Not found in Textchest or Monday.com`,
         thread_ts: message.ts
       });
       await app.client.reactions.add({
