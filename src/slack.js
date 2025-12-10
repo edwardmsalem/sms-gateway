@@ -1425,10 +1425,37 @@ app.message(async ({ message, say }) => {
   const text = message.text.trim();
 
   // Detect if input is email or phone
-  // Email: contains @ and looks like email format
-  // Phone: 10-11 digits
+  // Email: contains @ and looks like email format (handle Slack mailto links too)
   const emailMatch = text.match(/<mailto:([^|]+)\|[^>]+>/) || text.match(/^([^\s@]+@[^\s@]+\.[^\s@]+)$/i);
-  const phoneMatch = text.replace(/\D/g, '').match(/^1?\d{10}$/);
+
+  // Phone: extract digits and check for 10-11 digit number
+  // Handles: (555) 123-4567, 555-123-4567, 555.123.4567, +1 555 123 4567, 15551234567, etc.
+  const digitsOnly = text.replace(/\D/g, '');
+  let phoneMatch = null;
+
+  // Check if we have a valid phone number (10 or 11 digits)
+  if (digitsOnly.length === 10) {
+    phoneMatch = digitsOnly;
+  } else if (digitsOnly.length === 11 && digitsOnly.startsWith('1')) {
+    phoneMatch = digitsOnly;
+  } else if (digitsOnly.length === 12 && digitsOnly.startsWith('1')) {
+    // Handle +1 prefix where + becomes nothing but space adds extra
+    phoneMatch = digitsOnly.substring(1);
+  }
+
+  // Also try to extract phone from text that might have extra content
+  // e.g., "Phone: (555) 123-4567" or "Call 555-123-4567"
+  if (!phoneMatch && !emailMatch) {
+    const phonePattern = /(?:\+?1[-.\s]?)?\(?([0-9]{3})\)?[-.\s]?([0-9]{3})[-.\s]?([0-9]{4})/;
+    const extracted = text.match(phonePattern);
+    if (extracted) {
+      phoneMatch = extracted[1] + extracted[2] + extracted[3];
+      // Add leading 1 if not present (normalize to 11 digits)
+      if (phoneMatch.length === 10) {
+        phoneMatch = '1' + phoneMatch;
+      }
+    }
+  }
 
   if (!emailMatch && !phoneMatch) {
     // Not a recognizable email or phone, ignore
@@ -1468,17 +1495,17 @@ app.message(async ({ message, say }) => {
         foundRecord = await monday.searchExternalByEmail(email);
       }
     } else if (phoneMatch) {
-      const phone = text.replace(/\D/g, '');
+      // phoneMatch is already normalized to digits only
       searchType = 'phone';
-      console.log(`[SIM ACTIVATE] Searching by phone: ${phone}`);
+      console.log(`[SIM ACTIVATE] Searching by phone: ${phoneMatch}`);
 
       await say({
-        text: `🔍 Searching for ${formatPhoneDisplay(phone)}...`,
+        text: `🔍 Searching for ${formatPhoneDisplay(phoneMatch)}...`,
         thread_ts: message.ts
       });
 
       // Search Associates board by phone
-      foundRecord = await monday.searchAssociateByPhone(phone);
+      foundRecord = await monday.searchAssociateByPhone(phoneMatch);
     }
 
     if (!foundRecord) {
