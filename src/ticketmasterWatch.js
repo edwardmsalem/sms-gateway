@@ -1,10 +1,8 @@
 /**
  * Verification Code Watch Module
  * Monitors for verification codes from multiple services:
- * - Email: Microsoft, MLB, Ticketmaster, SeatGeek, StubHub, Vivid Seats, Google
- * - SMS: Ticketmaster, MLB, AXS
- *
- * Personality: Short, smug, quietly triumphant. The reason everyone stopped hating drop day.
+ * - Email: Microsoft, MLB, Ticketmaster, SeatGeek, Google
+ * - SMS: Ticketmaster, MLB, AXS, Google
  */
 
 const { google } = require('googleapis');
@@ -15,70 +13,36 @@ const textchest = require('./textchest');
 const { normalizePhone, formatPhoneDisplay } = require('./utils');
 
 // ============================================================================
-// BOT PERSONALITY - Message templates (never repeat same one twice in a row)
+// MESSAGE TEMPLATES - Plain, clear responses
 // ============================================================================
 
 const MESSAGES = {
   watchStart: [
-    (email) => `Watching ${email}. This used to take five people and a group chat.`,
-    (email) => `On ${email} for 10 minutes. Plenty of time to be a hero.`,
-    (email) => `Stalking the inboxes for ${email}. They hate me.`,
-    (email) => `Code hunt: ${email}. The old way is crying somewhere.`,
-    (email) => `Eyes on ${email}. This is the part where I make it look easy. 🎯`,
-    (email) => `Watching ${email}. Refresh buttons everywhere just breathed a sigh of relief.`,
-    (email) => `10 minutes on ${email}. That's nine more than I usually need.`,
-    (email) => `${email} locked in. Verification codes don't stand a chance.`,
+    (email) => `Watching ${email} for 10 minutes.`,
   ],
   foundNumber: [
-    (num) => `Found ${num}. Waking it up from its nap.`,
-    (num) => `${num} located. Let's see if it remembers how to work.`,
-    (num) => `Got ${num}. Bringing it online.`,
-    (num) => `${num} acquired. Time to wake up.`,
+    (num) => `Found ${num}. Activating...`,
   ],
   activated: [
-    (slot) => `Slot ${slot} is awake and caffeinated.`,
-    (slot) => `Live on slot ${slot}. Listening.`,
-    (slot) => `Online. Slot ${slot} ready.`,
-    (slot) => `Slot ${slot} activated. Let's get this bread.`,
+    (slot) => `Slot ${slot} activated.`,
   ],
   codeFound: [
-    (code, service) => `*${code}*${service ? ` (${service})` : ''} — Never saw me coming. 🎯`,
-    (code, service) => `Got it: *${code}*${service ? ` from ${service}` : ''}. Old way would've taken three email forwards and a prayer.`,
-    (code, service) => `${service || 'Code'}: *${code}*. I love my job.`,
-    (code, service) => `*${code}*${service ? ` (${service})` : ''}. Somewhere a manual refresher just felt a chill.`,
-    (code, service) => `*${code}*${service ? ` from ${service}` : ''} delivered. You can stop holding your breath.`,
-    (code, service) => `${service || 'Code'}: *${code}*. This is why they built me.`,
-    (code, service) => `*${code}*${service ? ` (${service})` : ''}. Fastest hands in the inbox. 🚀`,
-    (code, service) => `Got it: *${code}*${service ? ` from ${service}` : ''}. Screenshot this for your resume.`,
-    (code, service) => `*${code}*${service ? ` (${service})` : ''}. Another one for the highlight reel.`,
-    (code, service) => `${service || 'Code'} secured: *${code}*. The old days are officially over.`,
+    (code, service) => `*${code}*${service ? ` (${service})` : ''}`,
   ],
   watchCompleteSuccess: [
-    () => `Watch complete. Go be a hero.`,
-    () => `That's time. Codes delivered, legends made.`,
-    () => `Done. The system works. 🚀`,
-    () => `And scene. Watch complete.`,
+    () => `Watch complete.`,
   ],
   watchCompleteEmpty: [
-    () => `10 minutes, nothing. Ticketmaster ghosted us. Issues? Ping <@U0144K906KA>.`,
-    () => `Watch complete. Came up dry. Blame Ticketmaster. Problems? <@U0144K906KA>.`,
-    () => `Nothing. Either it already came through or TM's being TM. Issues? <@U0144K906KA>.`,
-    () => `Time's up. No codes. Report issues to <@U0144K906KA>.`,
+    () => `Watch complete. No codes found. Issues? Ping <@U0144K906KA>.`,
   ],
   notFound: [
-    (email) => `No luck on ${email}. Even I have limits.`,
-    (email) => `Couldn't track down ${email}. Use email reset instead.`,
-    (email) => `${email} not in the system. Try email reset.`,
+    (email) => `${email} not found. Watching Gmail only.`,
   ],
   searching: [
-    () => `Hunting...`,
-    () => `One sec...`,
-    () => `Checking the files...`,
+    () => `Searching...`,
   ],
   activationFailed: [
-    () => `SIM's being difficult. Still watching though.`,
-    () => `Couldn't wake up the SIM. Watching anyway.`,
-    () => `Activation hiccup. Still on the case.`,
+    () => `SIM activation failed. Still watching Gmail.`,
   ],
 };
 
@@ -397,21 +361,6 @@ function detectEmailService(from, subject) {
     return { service: 'Ticketmaster', filterByEmail: true };
   }
 
-  // AXS - DON'T filter by email (show all)
-  if (fromLower.includes('@axs.com') || fromLower.includes('axs')) {
-    return { service: 'AXS', filterByEmail: false };
-  }
-
-  // StubHub
-  if (fromLower.includes('stubhub')) {
-    return { service: 'StubHub', filterByEmail: true };
-  }
-
-  // Vivid Seats
-  if (fromLower.includes('vividseats')) {
-    return { service: 'Vivid Seats', filterByEmail: true };
-  }
-
   // Google
   if (fromLower.includes('google.com') || fromLower.includes('accounts.google')) {
     return { service: 'Google', filterByEmail: true };
@@ -479,7 +428,7 @@ function extractCodeFromEmail(body, service) {
 
 /**
  * Poll Gmail for verification emails from ALL services
- * Searches for: Microsoft, MLB, SeatGeek, Ticketmaster, AXS, StubHub, Vivid Seats, Google
+ * Searches for: Microsoft, MLB, SeatGeek, Ticketmaster, Google
  */
 async function pollGmailForVerificationCodes(slackApp, watch, email) {
   const gmailClient = getGmailClient();
