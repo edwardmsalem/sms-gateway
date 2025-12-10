@@ -24,7 +24,7 @@ const MESSAGES = {
     (num) => `Found ${num}. Activating...`,
   ],
   activated: [
-    (slot) => `Slot ${slot} activated.`,
+    (bank, slot) => `${bank} slot ${slot} activated.`,
   ],
   codeFound: [
     (code, service) => `*${code}*${service ? ` (${service})` : ''}`,
@@ -106,8 +106,8 @@ const activeWatches = new Map();
 // Watch duration: 10 minutes
 const WATCH_DURATION_MS = 10 * 60 * 1000;
 
-// Polling interval: 10 seconds (more responsive for codes)
-const POLL_INTERVAL_MS = 10 * 1000;
+// Polling interval: 5 seconds (fast for time-sensitive codes)
+const POLL_INTERVAL_MS = 5 * 1000;
 
 /**
  * Check if a phone number has an active watch
@@ -635,7 +635,7 @@ async function startTextchestWatch(slackApp, email, slackChannel, threadTs) {
         const activateResult = await textchest.activateSim(textchestNumber.number);
         slotId = activateResult.slot;
         await postToThread(slackApp, slackChannel, threadTs,
-          getMessage('activated', slotId));
+          getMessage('activated', 'Textchest', slotId));
       } catch (err) {
         await postToThread(slackApp, slackChannel, threadTs,
           getMessage('activationFailed'));
@@ -680,7 +680,7 @@ async function startTextchestWatch(slackApp, email, slackChannel, threadTs) {
             try {
               await simbank.activateSlot(bank, slotInfo.slot);
               await postToThread(slackApp, slackChannel, threadTs,
-                getMessage('activated', slotInfo.slot));
+                getMessage('activated', `Bank ${slotInfo.bankId}`, slotInfo.slot));
             } catch (err) {
               await postToThread(slackApp, slackChannel, threadTs,
                 getMessage('activationFailed'));
