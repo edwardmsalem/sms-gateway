@@ -1,7 +1,7 @@
 /**
  * Verification Code Watch Module
  * Monitors for verification codes from multiple services:
- * - Email: Microsoft, MLB, Ticketmaster, SeatGeek, Google
+ * - Email: MLB, Ticketmaster, SeatGeek, Google, AXS
  * - SMS: Ticketmaster, MLB, AXS, Google
  */
 
@@ -335,38 +335,90 @@ setInterval(cleanupExpiredWatches, 60 * 1000);
 
 /**
  * Detect which service sent an email based on From header
- * Returns { service: string, filterByEmail: boolean }
+ * Returns { service: string, filterByEmail: boolean, isPasswordReset: boolean }
  */
 function detectEmailService(from, subject) {
   const fromLower = from.toLowerCase();
   const subjectLower = subject.toLowerCase();
-
-  // Microsoft/Outlook - DON'T filter by email (show all)
-  if (fromLower.includes('microsoft.com') || fromLower.includes('accountprotection')) {
-    return { service: 'Microsoft', filterByEmail: false };
-  }
+  const isPasswordReset = subjectLower.includes('password reset') ||
+                          subjectLower.includes('reset password') ||
+                          subjectLower.includes('change your') && subjectLower.includes('password');
 
   // MLB
   if (fromLower.includes('@mlb.com') || fromLower.includes('mlb.com')) {
-    return { service: 'MLB', filterByEmail: true };
+    return { service: 'MLB', filterByEmail: true, isPasswordReset };
+  }
+
+  // AXS (email comes through icloud.com relay but subject/from contains axs)
+  if (fromLower.includes('axs') || subjectLower.includes('axs')) {
+    return { service: 'AXS', filterByEmail: true, isPasswordReset };
   }
 
   // SeatGeek
   if (fromLower.includes('@seatgeek.com') || fromLower.includes('seatgeek')) {
-    return { service: 'SeatGeek', filterByEmail: true };
+    return { service: 'SeatGeek', filterByEmail: true, isPasswordReset };
   }
 
   // Ticketmaster
   if (fromLower.includes('ticketmaster')) {
-    return { service: 'Ticketmaster', filterByEmail: true };
+    return { service: 'Ticketmaster', filterByEmail: true, isPasswordReset };
   }
 
   // Google
   if (fromLower.includes('google.com') || fromLower.includes('accounts.google')) {
-    return { service: 'Google', filterByEmail: true };
+    return { service: 'Google', filterByEmail: true, isPasswordReset };
   }
 
-  return { service: null, filterByEmail: true };
+  return { service: null, filterByEmail: true, isPasswordReset };
+}
+
+/**
+ * Extract password reset link from email body
+ * Returns the reset URL or null
+ */
+function extractResetLink(body, service) {
+  // Service-specific reset link patterns
+  const linkPatterns = {
+    'MLB': [
+      /href="(https:\/\/ids\.mlb\.com\/email\/verify[^"]+)"/i,
+      /(https:\/\/ids\.mlb\.com\/email\/verify\S+)/i,
+    ],
+    'AXS': [
+      /href="(https:\/\/www\.axs\.com\/new-password[^"]+)"/i,
+      /(https:\/\/www\.axs\.com\/new-password\S+)/i,
+    ],
+    'SeatGeek': [
+      /href="(https:\/\/seatgeek\.com\/change_password\/code\/[^"]+)"/i,
+      /(https:\/\/seatgeek\.com\/change_password\/code\/\S+)/i,
+      /<(https:\/\/seatgeek\.com\/change_password\/code\/[^>]+)>/i,  // Text format: <URL>
+    ],
+  };
+
+  // Try service-specific patterns
+  if (service && linkPatterns[service]) {
+    for (const pattern of linkPatterns[service]) {
+      const match = body.match(pattern);
+      if (match) {
+        // Clean up the URL (unescape HTML entities)
+        return match[1].replace(/&amp;/g, '&');
+      }
+    }
+  }
+
+  // Generic reset link patterns
+  const genericPatterns = [
+    /href="(https?:\/\/[^"]*(?:reset|password|verify)[^"]+)"/i,
+    /(https?:\/\/\S*(?:reset-password|new-password|verify)\S+)/i,
+  ];
+
+  for (const pattern of genericPatterns) {
+    const match = body.match(pattern);
+    if (match) {
+      return match[1].replace(/&amp;/g, '&');
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -376,10 +428,6 @@ function detectEmailService(from, subject) {
 function extractCodeFromEmail(body, service) {
   // Service-specific patterns
   const servicePatterns = {
-    'Microsoft': [
-      /Security code:\s*(\d{6})/i,
-      /security code is[:\s]*(\d{6})/i,
-    ],
     'MLB': [
       /verification code is[:\s]*(?:<[^>]*>)?(\d{6})/i,
       /verification code[:\s]*(\d{6})/i,
@@ -428,7 +476,8 @@ function extractCodeFromEmail(body, service) {
 
 /**
  * Poll Gmail for verification emails from ALL services
- * Searches for: Microsoft, MLB, SeatGeek, Ticketmaster, Google
+ * Searches for: MLB, SeatGeek, Ticketmaster, Google, AXS
+ * Handles both verification codes AND password reset links
  */
 async function pollGmailForVerificationCodes(slackApp, watch, email) {
   const gmailClient = getGmailClient();
@@ -448,9 +497,10 @@ async function pollGmailForVerificationCodes(slackApp, watch, email) {
       // Search for verification emails from ALL supported services
       // Query breakdown:
       // - Subject patterns for verification/security/authentication codes
+      // - Subject patterns for password resets
       // - From known senders OR containing the target email
       // - Only last 1 hour
-      const query = `(subject:"security code" OR subject:"verification code" OR subject:"authentication code" OR subject:"reset password" OR subject:"sign in" OR subject:"sign into") newer_than:1h`;
+      const query = `(subject:"security code" OR subject:"verification code" OR subject:"authentication code" OR subject:"reset password" OR subject:"password reset" OR subject:"change your" OR subject:"sign in" OR subject:"sign into") newer_than:1h`;
 
       const response = await gmailClient.users.messages.list({
         userId: 'me',
@@ -480,7 +530,7 @@ async function pollGmailForVerificationCodes(slackApp, watch, email) {
         const deliveredTo = headers.find(h => h.name.toLowerCase() === 'delivered-to')?.value || '';
 
         // Detect service
-        const { service, filterByEmail } = detectEmailService(from, subject);
+        const { service, filterByEmail, isPasswordReset } = detectEmailService(from, subject);
 
         // Check if email matches target (unless service doesn't filter)
         const emailLower = email.toLowerCase();
@@ -494,41 +544,45 @@ async function pollGmailForVerificationCodes(slackApp, watch, email) {
           continue;
         }
 
-        // Extract body (handle multipart)
+        // Extract body (handle multipart) - prefer HTML for reset links
         let body = '';
+        let htmlBody = '';
         const payload = fullMessage.data.payload;
         if (payload.body?.data) {
           body = Buffer.from(payload.body.data, 'base64').toString('utf8');
+          htmlBody = body;
         } else if (payload.parts) {
-          // Try text/plain first, then text/html
           const textPart = payload.parts.find(p => p.mimeType === 'text/plain');
           const htmlPart = payload.parts.find(p => p.mimeType === 'text/html');
           if (textPart?.body?.data) {
             body = Buffer.from(textPart.body.data, 'base64').toString('utf8');
-          } else if (htmlPart?.body?.data) {
-            body = Buffer.from(htmlPart.body.data, 'base64').toString('utf8');
+          }
+          if (htmlPart?.body?.data) {
+            htmlBody = Buffer.from(htmlPart.body.data, 'base64').toString('utf8');
           }
         }
 
-        // Extract code
-        const code = extractCodeFromEmail(body, service);
-
         watch.postedEmails.add(msg.id);
 
-        // Post code if found
-        if (code) {
-          watch.codesDelivered = true;
-
-          if (!filterByEmail) {
-            // Microsoft/AXS - show with disclaimer
+        // Handle password reset emails (extract link)
+        if (isPasswordReset) {
+          const resetLink = extractResetLink(htmlBody || body, service);
+          if (resetLink) {
+            watch.codesDelivered = true;
             await postToThread(slackApp, watch.slackChannel, watch.threadTs,
-              `📬 *${code}* (${service}) — may not be for this email`);
-          } else {
+              `🔗 *${service} Password Reset*\n${resetLink}`);
+            console.log(`[CODE WATCH] Found ${service} reset link`);
+          }
+        } else {
+          // Handle verification code emails
+          const code = extractCodeFromEmail(body || htmlBody, service);
+
+          if (code) {
+            watch.codesDelivered = true;
             await postToThread(slackApp, watch.slackChannel, watch.threadTs,
               getMessage('codeFound', code, service));
+            console.log(`[CODE WATCH] Found ${service || 'unknown'} code: ${code}`);
           }
-
-          console.log(`[CODE WATCH] Found ${service || 'unknown'} code: ${code}`);
         }
 
         // Mark as read
