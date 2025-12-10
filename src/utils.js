@@ -112,12 +112,12 @@ async function withRetry(fn, options = {}) {
 
 /**
  * Extract SIM bank config from environment variables
- * Supports up to 5 SIM banks: SIMBANK_1_*, SIMBANK_2_*, etc.
+ * Supports up to 10 SIM banks: SIMBANK_1_*, SIMBANK_2_*, etc.
  */
 function loadSimBanksFromEnv() {
   const simBanks = [];
 
-  for (let i = 1; i <= 5; i++) {
+  for (let i = 1; i <= 10; i++) {
     const id = process.env[`SIMBANK_${i}_ID`];
     const ip = process.env[`SIMBANK_${i}_IP`];
 
