@@ -602,7 +602,7 @@ app.event('app_mention', async ({ event, say }) => {
 
     // Start the Textchest+Gmail watch asynchronously
     setImmediate(() => {
-      ticketmasterWatch.startTextchestWatch(app, email, event.channel, event.ts)
+      ticketmasterWatch.startTextchestWatch(app, email, event.channel, event.ts, event.user)
         .catch(error => {
           console.error('[CODE WATCH] Watch failed:', error.message);
           app.client.chat.postMessage({
@@ -1388,7 +1388,7 @@ app.message(/^(code|tm)\s+/i, async ({ message, say }) => {
 
   // Start the Textchest+Gmail watch asynchronously
   setImmediate(() => {
-    ticketmasterWatch.startTextchestWatch(app, email, message.channel, message.ts)
+    ticketmasterWatch.startTextchestWatch(app, email, message.channel, message.ts, message.user)
       .catch(error => {
         console.error('[CODE WATCH] Watch failed:', error.message);
         app.client.chat.postMessage({

@@ -18,7 +18,7 @@ const { normalizePhone, formatPhoneDisplay } = require('./utils');
 
 const MESSAGES = {
   watchStart: [
-    (email) => `Watching ${email} for 10 minutes.`,
+    (email, userId) => `<@${userId}> Watching ${email} for 10 minutes.`,
   ],
   foundNumber: [
     (num) => `Found ${num}. Activating...`,
@@ -33,7 +33,7 @@ const MESSAGES = {
     () => `Watch complete.`,
   ],
   watchCompleteEmpty: [
-    () => `Watch complete. No codes found. Issues? Ping <@U0144K906KA>.`,
+    () => `Watch complete. No codes found.`,
   ],
   notFound: [
     (email) => `${email} not found. Watching Gmail only.`,
@@ -611,8 +611,9 @@ const pollGmailForTicketmaster = pollGmailForVerificationCodes;
  * @param {string} email - Email address to search for
  * @param {string} slackChannel - Slack channel ID
  * @param {string} threadTs - Thread timestamp for replies
+ * @param {string} userId - Slack user ID who triggered the watch
  */
-async function startTextchestWatch(slackApp, email, slackChannel, threadTs) {
+async function startTextchestWatch(slackApp, email, slackChannel, threadTs, userId) {
   try {
     let smsSource = null;
     let phoneDisplay = null;
@@ -716,7 +717,7 @@ async function startTextchestWatch(slackApp, email, slackChannel, threadTs) {
 
     // Opening line
     await postToThread(slackApp, slackChannel, threadTs,
-      getMessage('watchStart', email));
+      getMessage('watchStart', email, userId));
 
     // Set cleanup timer
     setTimeout(() => {
