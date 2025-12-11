@@ -415,15 +415,15 @@ async function postSpamMessage(senderPhone, recipientPhone, content, spamResult,
     });
 
     // Update parent message with new count
-    const messagePreview = (content.length > 300 ? content.substring(0, 300) + '...' : content)
-      .replace(/\n+/g, ' ')
-      .replace(/\*/g, '✱');
-    let parentText = `🚫 *${messagePreview} *\n\n`;
-    parentText += `_${existingThread.count} recipients · ${senderDisplay} · ${senderState || 'Unknown'}`;
+    const messageText = content.length > 500 ? content.substring(0, 500) + '...' : content;
+    let parentText = `🚫 *SPAM*  ·  ${senderDisplay}  ·  ${senderState || 'Unknown'}`;
     if (bankId === 'maxsip') {
-      parentText += ` · Maxsip`;
+      parentText += `  ·  Maxsip`;
     }
-    parentText += ` · ${spamResult.category || 'Spam'}_`;
+    parentText += `  ·  ${spamResult.category || 'Spam'}  ·  _${existingThread.count} recipients_\n`;
+    parentText += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    parentText += `${messageText}\n`;
+    parentText += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
 
     try {
       await app.client.chat.update({
@@ -437,20 +437,19 @@ async function postSpamMessage(senderPhone, recipientPhone, content, spamResult,
 
     console.log(`[SPAM THREAD] Added to thread ${existingThread.thread_ts}, count: ${existingThread.count}`);
   } else {
-    // Create new parent message - message text is the hero
-    // Replace newlines with spaces and escape asterisks to prevent markdown breaking
-    const messagePreview = (content.length > 300 ? content.substring(0, 300) + '...' : content)
-      .replace(/\n+/g, ' ')
-      .replace(/\*/g, '✱');
+    // Create new parent message with clear separators
+    const messageText = content.length > 500 ? content.substring(0, 500) + '...' : content;
 
-    let text = `🚫 *${messagePreview} *\n\n`;
-    text += `_${senderDisplay} → ${recipientDisplay} · ${senderState || 'Unknown'}`;
+    let text = `🚫 *SPAM*  ·  ${senderDisplay} → ${recipientDisplay}  ·  ${senderState || 'Unknown'}`;
     if (bankId === 'maxsip') {
-      text += ` · Maxsip`;
+      text += `  ·  Maxsip`;
     } else if (bankId) {
-      text += ` · Bank ${bankId}`;
+      text += `  ·  Bank ${bankId}`;
     }
-    text += ` · ${spamResult.category || 'Spam'}_`;
+    text += `  ·  ${spamResult.category || 'Spam'}\n`;
+    text += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    text += `${messageText}\n`;
+    text += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
 
     const result = await app.client.chat.postMessage({
       channel: SPAM_CHANNEL_ID,
@@ -575,7 +574,7 @@ app.event('app_mention', async ({ event, say }) => {
 
     if (!bankId || !slot) {
       await say({
-        text: 'Usage: `@Salem AI status [bank] [slot]`\nExample: `@Salem AI status 50004 4.07`',
+        text: `📊 *Check SIM Status*\n\nFormat: \`@Salem AI status <bank> <slot>\`\n\n*Example:*\n\`@Salem AI status 50001 3.05\``,
         thread_ts: event.thread_ts || event.ts
       });
       return;
@@ -688,7 +687,7 @@ app.event('app_mention', async ({ event, say }) => {
     // Must be in a thread for SMS sending
     if (!event.thread_ts) {
       await say({
-        text: 'Please use `@Salem AI reply` in a conversation thread.\nUsage: `@Salem AI reply <bank> <slot> <message>`\nExample: `@Salem AI reply 50004 4.07 Hello there`',
+        text: `📱 *How to Send SMS Reply*\n\nGo to any conversation thread and type:\n\`@Salem AI reply <bank> <slot> <message>\`\n\n*Example:*\n\`@Salem AI reply 50001 3.05 Thanks for reaching out!\`\n\nThe bank ID and slot are shown in each message.`,
         thread_ts: event.ts
       });
       return;
@@ -702,7 +701,7 @@ app.event('app_mention', async ({ event, say }) => {
     // Validate bank format (e.g., "50004")
     if (!specifiedBank || !/^\d{5}$/.test(specifiedBank)) {
       await say({
-        text: `Invalid format. Bank ID is required (5 digits).\nUsage: \`@Salem AI reply <bank> <slot> <message>\`\nExample: \`@Salem AI reply 50004 4.07 Hello there\``,
+        text: `❌ *Missing Bank ID*\n\nFormat: \`@Salem AI reply <bank> <slot> <message>\`\n\nCheck the original message for the Bank ID (5 digits like 50001, 50024, etc.)`,
         thread_ts: event.thread_ts
       });
       return;
@@ -711,7 +710,7 @@ app.event('app_mention', async ({ event, say }) => {
     // Validate slot format (e.g., "4.07", "1.01")
     if (!specifiedSlot || !/^\d+\.\d+$/.test(specifiedSlot)) {
       await say({
-        text: `Invalid format. Slot is required.\nUsage: \`@Salem AI reply <bank> <slot> <message>\`\nExample: \`@Salem AI reply ${specifiedBank} 4.07 Hello there\``,
+        text: `❌ *Missing Slot*\n\nFormat: \`@Salem AI reply ${specifiedBank} <slot> <message>\`\n\nCheck the original message for the Slot (format like 4.07, 1.01, etc.)`,
         thread_ts: event.thread_ts
       });
       return;
@@ -719,7 +718,7 @@ app.event('app_mention', async ({ event, say }) => {
 
     if (!message) {
       await say({
-        text: `Message is required.\nUsage: \`@Salem AI reply ${specifiedBank} ${specifiedSlot} <message>\``,
+        text: `❌ *Missing Message*\n\nFormat: \`@Salem AI reply ${specifiedBank} ${specifiedSlot} <your message here>\``,
         thread_ts: event.thread_ts
       });
       return;
