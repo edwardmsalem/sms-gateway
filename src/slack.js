@@ -230,13 +230,13 @@ function buildEnrichedSmsBlocks({ content, bankId, port, enrichment, iccid }) {
 
     text += '\n';
     text += `"${content}"\n\n`;
-    text += `_Reply: @Salem AI reply ${bankId} ${port} followed by your message_`;
+    text += `\`@Salem AI reply ${bankId} ${port}\`\n*Copy above, then add your message*`;
   } else {
     // Format without deal info
     text += `📥 *New SMS to ${receiverPhoneFormatted}*\n`;
     text += `From: ${senderPhoneFormatted} · ${senderStateName || 'Unknown'}\n\n`;
     text += `"${content}"\n\n`;
-    text += `_Reply: @Salem AI reply ${bankId} ${port} followed by your message_`;
+    text += `\`@Salem AI reply ${bankId} ${port}\`\n*Copy above, then add your message*`;
   }
 
   return [{
