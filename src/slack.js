@@ -559,13 +559,14 @@ function formatSlotStatusForSlack(status) {
 app.event('app_mention', async ({ event, say }) => {
   await addReaction(event.channel, event.ts, 'eyes');
 
-  // Parse the command text - handle both <@U123> and <@U123|username> formats
-  const fullText = event.text.replace(/<@[A-Z0-9]+(\|[^>]+)?>/gi, '').trim();
+  // Parse the command text - strip ALL mentions (handles any format)
+  const fullText = event.text.replace(/<@[^>]+>/gi, '').trim();
   const parts = fullText.split(/\s+/);
 
   console.log(`[MENTION DEBUG] Raw text: "${event.text}"`);
   console.log(`[MENTION DEBUG] Parsed: "${fullText}"`);
-  console.log(`[MENTION DEBUG] Parts[0]: "${parts[0]}", User: ${event.user}`);
+  console.log(`[MENTION DEBUG] Parts: ${JSON.stringify(parts)}`);
+  console.log(`[MENTION DEBUG] User: ${event.user}, Thread: ${event.thread_ts || 'none'}`);
 
   // Check if this is a status command
   if (parts[0]?.toLowerCase() === 'status') {
