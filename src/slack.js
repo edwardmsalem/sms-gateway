@@ -559,8 +559,9 @@ function formatSlotStatusForSlack(status) {
 app.event('app_mention', async ({ event, say }) => {
   await addReaction(event.channel, event.ts, 'eyes');
 
-  // Parse the command text - strip ALL mentions (handles any format)
-  const fullText = event.text.replace(/<@[^>]+>/gi, '').trim();
+  // Parse the command text - strip ALL mentions and formatting (italic _, bold *, strikethrough ~)
+  let fullText = event.text.replace(/<@[^>]+>/gi, '').trim();
+  fullText = fullText.replace(/^[_*~]+|[_*~]+$/g, '').trim();
   const parts = fullText.split(/\s+/);
 
   console.log(`[MENTION DEBUG] Raw text: "${event.text}"`);
