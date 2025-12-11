@@ -14,7 +14,7 @@ const ticketmasterWatch = require('./ticketmasterWatch');
 // Message deduplication - track recently processed messages to prevent duplicates
 // Key: hash of sender+recipient+content, Value: timestamp
 const recentMessages = new Map();
-const DEDUPE_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
+const DEDUPE_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
  * Generate a deduplication key for a message
@@ -44,6 +44,8 @@ function isDuplicateMessage(sender, recipient, content) {
   if (recentMessages.has(key)) {
     const lastSeen = recentMessages.get(key);
     if (now - lastSeen < DEDUPE_WINDOW_MS) {
+      const ageSeconds = Math.round((now - lastSeen) / 1000);
+      console.log(`[DEDUPE] Duplicate detected - content: "${content.substring(0, 50)}", age: ${ageSeconds}s`);
       return true; // Duplicate
     }
   }

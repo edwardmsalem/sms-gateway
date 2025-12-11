@@ -126,7 +126,7 @@ function buildSmsBlocks({ recipientDisplay, senderDisplay, content, bankId, port
   } else {
     text += `From: ${senderDisplay}\n📍 *Bank ${bankId} · Slot ${port}*`;
     if (iccid) text += `\n• *ICCID:* ${iccid}`;
-    text += `\nReceived: ${timestamp}\n\n_Reply: @Salem AI ${bankId} ${port} followed by your message_`;
+    text += `\nReceived: ${timestamp}\n\n\`@Salem AI reply ${bankId} ${port}\`\n*Copy above, then add your message*`;
   }
 
   return [{
@@ -415,15 +415,15 @@ async function postSpamMessage(senderPhone, recipientPhone, content, spamResult,
     });
 
     // Update parent message with new count
-    const messagePreview = (content.length > 300 ? content.substring(0, 300) + '...' : content)
-      .replace(/\n+/g, ' ')
-      .replace(/\*/g, '✱');
-    let parentText = `🚫 *${messagePreview} *\n\n`;
-    parentText += `_${existingThread.count} recipients · ${senderDisplay} · ${senderState || 'Unknown'}`;
+    const messageText = content.length > 500 ? content.substring(0, 500) + '...' : content;
+    let parentText = `🚫 *SPAM*  ·  ${senderDisplay}  ·  ${senderState || 'Unknown'}`;
     if (bankId === 'maxsip') {
-      parentText += ` · Maxsip`;
+      parentText += `  ·  Maxsip`;
     }
-    parentText += ` · ${spamResult.category || 'Spam'}_`;
+    parentText += `  ·  ${spamResult.category || 'Spam'}  ·  _${existingThread.count} recipients_\n`;
+    parentText += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    parentText += `${messageText}\n`;
+    parentText += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
 
     try {
       await app.client.chat.update({
@@ -437,20 +437,19 @@ async function postSpamMessage(senderPhone, recipientPhone, content, spamResult,
 
     console.log(`[SPAM THREAD] Added to thread ${existingThread.thread_ts}, count: ${existingThread.count}`);
   } else {
-    // Create new parent message - message text is the hero
-    // Replace newlines with spaces and escape asterisks to prevent markdown breaking
-    const messagePreview = (content.length > 300 ? content.substring(0, 300) + '...' : content)
-      .replace(/\n+/g, ' ')
-      .replace(/\*/g, '✱');
+    // Create new parent message with clear separators
+    const messageText = content.length > 500 ? content.substring(0, 500) + '...' : content;
 
-    let text = `🚫 *${messagePreview} *\n\n`;
-    text += `_${senderDisplay} → ${recipientDisplay} · ${senderState || 'Unknown'}`;
+    let text = `🚫 *SPAM*  ·  ${senderDisplay} → ${recipientDisplay}  ·  ${senderState || 'Unknown'}`;
     if (bankId === 'maxsip') {
-      text += ` · Maxsip`;
+      text += `  ·  Maxsip`;
     } else if (bankId) {
-      text += ` · Bank ${bankId}`;
+      text += `  ·  Bank ${bankId}`;
     }
-    text += ` · ${spamResult.category || 'Spam'}_`;
+    text += `  ·  ${spamResult.category || 'Spam'}\n`;
+    text += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    text += `${messageText}\n`;
+    text += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
 
     const result = await app.client.chat.postMessage({
       channel: SPAM_CHANNEL_ID,
@@ -560,13 +559,15 @@ function formatSlotStatusForSlack(status) {
 app.event('app_mention', async ({ event, say }) => {
   await addReaction(event.channel, event.ts, 'eyes');
 
-  // Parse the command text - handle both <@U123> and <@U123|username> formats
-  const fullText = event.text.replace(/<@[A-Z0-9]+(\|[^>]+)?>/gi, '').trim();
+  // Parse the command text - strip ALL mentions and formatting (italic _, bold *, strikethrough ~)
+  let fullText = event.text.replace(/<@[^>]+>/gi, '').trim();
+  fullText = fullText.replace(/^[_*~]+|[_*~]+$/g, '').trim();
   const parts = fullText.split(/\s+/);
 
   console.log(`[MENTION DEBUG] Raw text: "${event.text}"`);
   console.log(`[MENTION DEBUG] Parsed: "${fullText}"`);
-  console.log(`[MENTION DEBUG] Parts[0]: "${parts[0]}", User: ${event.user}`);
+  console.log(`[MENTION DEBUG] Parts: ${JSON.stringify(parts)}`);
+  console.log(`[MENTION DEBUG] User: ${event.user}, Thread: ${event.thread_ts || 'none'}`);
 
   // Check if this is a status command
   if (parts[0]?.toLowerCase() === 'status') {
@@ -575,7 +576,7 @@ app.event('app_mention', async ({ event, say }) => {
 
     if (!bankId || !slot) {
       await say({
-        text: 'Usage: `@Salem AI status [bank] [slot]`\nExample: `@Salem AI status 50004 4.07`',
+        text: `📊 *Check SIM Status*\n\nFormat: \`@Salem AI status <bank> <slot>\`\n\n*Example:*\n\`@Salem AI status 50001 3.05\``,
         thread_ts: event.thread_ts || event.ts
       });
       return;
@@ -688,7 +689,7 @@ app.event('app_mention', async ({ event, say }) => {
     // Must be in a thread for SMS sending
     if (!event.thread_ts) {
       await say({
-        text: 'Please use `@Salem AI reply` in a conversation thread.\nUsage: `@Salem AI reply <bank> <slot> <message>`\nExample: `@Salem AI reply 50004 4.07 Hello there`',
+        text: `📱 *How to Send SMS Reply*\n\nGo to any conversation thread and type:\n\`@Salem AI reply <bank> <slot> <message>\`\n\n*Example:*\n\`@Salem AI reply 50001 3.05 Thanks for reaching out!\`\n\nThe bank ID and slot are shown in each message.`,
         thread_ts: event.ts
       });
       return;
@@ -702,7 +703,7 @@ app.event('app_mention', async ({ event, say }) => {
     // Validate bank format (e.g., "50004")
     if (!specifiedBank || !/^\d{5}$/.test(specifiedBank)) {
       await say({
-        text: `Invalid format. Bank ID is required (5 digits).\nUsage: \`@Salem AI reply <bank> <slot> <message>\`\nExample: \`@Salem AI reply 50004 4.07 Hello there\``,
+        text: `❌ *Missing Bank ID*\n\nFormat: \`@Salem AI reply <bank> <slot> <message>\`\n\nCheck the original message for the Bank ID (5 digits like 50001, 50024, etc.)`,
         thread_ts: event.thread_ts
       });
       return;
@@ -711,7 +712,7 @@ app.event('app_mention', async ({ event, say }) => {
     // Validate slot format (e.g., "4.07", "1.01")
     if (!specifiedSlot || !/^\d+\.\d+$/.test(specifiedSlot)) {
       await say({
-        text: `Invalid format. Slot is required.\nUsage: \`@Salem AI reply <bank> <slot> <message>\`\nExample: \`@Salem AI reply ${specifiedBank} 4.07 Hello there\``,
+        text: `❌ *Missing Slot*\n\nFormat: \`@Salem AI reply ${specifiedBank} <slot> <message>\`\n\nCheck the original message for the Slot (format like 4.07, 1.01, etc.)`,
         thread_ts: event.thread_ts
       });
       return;
@@ -719,7 +720,7 @@ app.event('app_mention', async ({ event, say }) => {
 
     if (!message) {
       await say({
-        text: `Message is required.\nUsage: \`@Salem AI reply ${specifiedBank} ${specifiedSlot} <message>\``,
+        text: `❌ *Missing Message*\n\nFormat: \`@Salem AI reply ${specifiedBank} ${specifiedSlot} <your message here>\``,
         thread_ts: event.thread_ts
       });
       return;
@@ -1040,7 +1041,7 @@ app.command('/status', async ({ command, ack, respond }) => {
 /**
  * /sweep-test command handler
  * Switches all 64 ports to slot 03 and tracks message arrivals
- * Usage: /sweep-test
+ * Usage: /sweep-test <bank_id>
  */
 app.command('/sweep-test', async ({ command, ack, respond }) => {
   // Acknowledge immediately to avoid Slack timeout
@@ -1055,14 +1056,37 @@ app.command('/sweep-test', async ({ command, ack, respond }) => {
     return;
   }
 
+  // Parse bank ID from command text
+  const bankId = command.text?.trim();
+  if (!bankId) {
+    const banks = db.getAllSimBanks();
+    const bankList = banks.map(b => b.bank_id).join(', ');
+    respond({
+      response_type: 'ephemeral',
+      text: `Usage: \`/sweep-test <bank_id>\`\nAvailable banks: ${bankList || 'none configured'}`
+    });
+    return;
+  }
+
+  // Verify bank exists
+  const bank = db.getSimBank(bankId);
+  if (!bank) {
+    const banks = db.getAllSimBanks();
+    const bankList = banks.map(b => b.bank_id).join(', ');
+    respond({
+      response_type: 'ephemeral',
+      text: `Bank ${bankId} not found.\nAvailable banks: ${bankList || 'none configured'}`
+    });
+    return;
+  }
+
   // Respond immediately - don't await
   respond({
     response_type: 'ephemeral',
-    text: `🧪 Sweep test starting...`
+    text: `🧪 Sweep test starting for bank ${bankId}...`
   });
 
   // Run the test fully asynchronously in the background
-  const bankId = '50004';
   setImmediate(() => {
     sweepTest.runSweepTest(app, bankId).catch(error => {
       console.error('Sweep test failed:', error.message);
