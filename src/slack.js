@@ -126,7 +126,7 @@ function buildSmsBlocks({ recipientDisplay, senderDisplay, content, bankId, port
   } else {
     text += `From: ${senderDisplay}\n📍 *Bank ${bankId} · Slot ${port}*`;
     if (iccid) text += `\n• *ICCID:* ${iccid}`;
-    text += `\nReceived: ${timestamp}\n\n_Reply: @Salem AI ${bankId} ${port} followed by your message_`;
+    text += `\nReceived: ${timestamp}\n\n*To reply:*\n\`@Salem AI reply ${bankId} ${port} <your message>\``;
   }
 
   return [{
